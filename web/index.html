@@ -1,0 +1,122 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CleanCode Agent</title>
+    <link rel="stylesheet" href="/static/github.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=monaco-v2" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <div class="app-layout">
+        <aside class="conversation-sidebar" v-if="historyEnabled">
+          <div class="sidebar-header">
+            <h2>历史会话</h2>
+            <button type="button"  title="新建会话" @click="startNewConversation"><i class="fa-solid fa-circle-plus"></i></button>
+          </div>
+          <div class="conversation-list">
+            <div v-if="conversations.length === 0" class="conversation-empty">暂无会话</div>
+            <div
+              v-for="conversation in conversations"
+              :key="conversation.id"
+              class="conversation-row"
+              :class="{ active: conversation.id === currentConversationId }"
+            >
+              <button type="button" class="conversation-item" @click="loadConversation(conversation.id)">
+                <span class="conversation-title">{{ conversation.title || 'New conversation' }}</span>
+                <span class="conversation-time">{{ formatTime(conversation.updated_at) }}</span>
+              </button>
+              <button type="button" class="conversation-delete" title="删除会话" @click="deleteConversation(conversation)"><i class="fa-regular fa-trash-can"></i></button>
+            </div>
+          </div>
+        </aside>
+
+        <main class="chat-panel">
+          <header class="topbar">
+            <div class="title-row">
+              <h1>CleanCode Agent</h1>
+              <p>{{ modelStatus }}</p>
+            </div>
+          </header>
+
+          <section ref="messagesEl" class="messages" aria-live="polite">
+            <article v-for="message in messages" :key="message.localId || message.id" class="message" :class="message.role">
+              <div v-if="message.role === 'assistant' || message.role === 'system'" class="message-body markdown-body" v-html="renderAssistantContent(message.content)"></div>
+              <div v-else class="message-body">{{ message.content }}</div>
+            </article>
+          </section>
+
+          <form class="composer" @submit.prevent="submitMessage">
+            <textarea
+              v-model="prompt"
+              rows="4"
+              placeholder="输入你的需求，例如：写一个 Python 函数，或基于右侧代码修改变量名..."
+              :disabled="busy"
+              @keydown="handleComposerKeydown"
+              required
+            ></textarea>
+            <button type="submit" :disabled="busy || !prompt.trim()"><i v-if="busy" class="fa-solid fa-spinner fa-spin"></i><i v-else class="fa-solid fa-paper-plane"></i></button>
+          </form>
+        </main>
+
+        <aside class="code-panel">
+          <header class="code-panel-header">
+            <div>
+              <h2>代码区</h2>
+              <p v-if="workspace.snapshot_id">快照 #{{ workspace.snapshot_id }}</p>
+              <p v-else>模型生成的代码会集中显示在这里</p>
+            </div>
+            <div class="code-actions">
+              <select class="theme-select" v-model="codeTheme" title="代码高亮主题"><option value="auto">跟随系统</option><option value="clean-dark">Clean Dark</option><option value="github-light">GitHub Light</option><option value="vs-dark">VS Dark</option><option value="vs">VS Light</option></select>
+              <button type="button" title="复制当前文件" @click="copyActiveFile" :disabled="!activeFile"><i class="fa-solid fa-copy"></i></button>
+              <button type="button" title="运行 Python" @click="runActiveFile" :disabled="!canRunActiveFile || running"><i v-if="running" class="fa-solid fa-spinner fa-spin"></i><i v-else class="fa-solid fa-play"></i></button>
+            </div>
+          </header>
+
+          <div v-if="workspace.files.length" class="file-tabs" role="tablist">
+            <button
+              v-for="file in workspace.files"
+              :key="file.path"
+              type="button"
+              :class="{ active: file.path === workspace.active_file }"
+              @click="workspace.active_file = file.path"
+            >{{ file.path }}</button>
+          </div>
+
+          <div
+            v-if="activeFile"
+            ref="codeEditorEl"
+            class="code-editor monaco-editor-host"
+          ></div>
+          <div v-if="activeFile && monacoLoadError" class="editor-error">{{ monacoLoadError }}</div>
+          <div v-else-if="!activeFile" class="empty-code-state">
+            <strong>暂无代码</strong>
+            <span>当你让模型写代码时，聊天区会保留解释，代码会进入这里并可直接修改。</span>
+          </div>
+
+          <section v-if="runOutput" class="run-output">
+            <div class="run-output-header">运行结果</div>
+            <pre>{{ runOutput }}</pre>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="/static/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+    <script src="/static/app.js?v=monaco-v2"></script>
+  </body>
+</html>
+
+
+
+
+
+
