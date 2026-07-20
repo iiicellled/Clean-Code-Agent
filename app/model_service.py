@@ -109,6 +109,9 @@ class RemoteChatModel(_ServiceConfigMixin):
             ) from exc
 
         answer = self._extract_answer(response.json())
+        if not answer:
+            raise RemoteModelError(f"{self.stg.label} model returned an empty answer")
+        logger.info("%s model answer content:\n%s", self.stg.label, answer)
         logger.info("%s model HTTP call succeeded: answer_chars=%d", self.stg.label, len(answer))
         return answer
 
@@ -124,6 +127,8 @@ class RemoteChatModel(_ServiceConfigMixin):
             "top_p": cfg.top_p,
             "stream": True,
         }
+
+        chunks: list[str] = []
 
         try:
             with httpx.Client(timeout=None, verify=self.stg.verify_tls, trust_env=False) as client:
@@ -147,7 +152,10 @@ class RemoteChatModel(_ServiceConfigMixin):
                         delta = choices[0].get("delta") or {}
                         content = delta.get("content")
                         if content:
+                            chunks.append(content)
                             yield content
+            answer = "".join(chunks).strip()
+            logger.info("%s model streamed answer content:\n%s", self.stg.label, answer)
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:1000]
             raise RemoteModelError(f"{self.stg.label} model returned HTTP {exc.response.status_code}: {body}") from exc
@@ -256,6 +264,8 @@ class LangChainChatModel(_ServiceConfigMixin):
         if not isinstance(content, str):
             raise RemoteModelError(f"Unexpected {self.stg.label} response content: {content}")
         answer = content.strip()
+        if not answer:
+            raise RemoteModelError(f"{self.stg.label} model returned an empty answer")
         logger.info("%s model LangChain call succeeded: answer_chars=%d", self.stg.label, len(answer))
         return answer
 
@@ -281,14 +291,34 @@ class LangChainChatModel(_ServiceConfigMixin):
             streaming=True,
         )
 
+
+        chunks: list[str] = []
+        finish_reasons: list[str] = []
+        last_response_metadata: dict[str, Any] = {}
+        last_generation_info: dict[str, Any] = {}
         try:
             for chunk in llm.stream(self._to_langchain_messages(messages)):
+                response_metadata = getattr(chunk, "response_metadata", None) or {}
+                generation_info = getattr(chunk, "generation_info", None) or {}
+                if response_metadata:
+                    last_response_metadata = dict(response_metadata)
+                if generation_info:
+                    last_generation_info = dict(generation_info)
+                finish_reason = response_metadata.get("finish_reason") or generation_info.get("finish_reason")
+                if finish_reason:
+                    finish_reasons.append(str(finish_reason))
                 content = getattr(chunk, "content", "")
                 if isinstance(content, list):
                     text_parts = [part.get("text", "") for part in content if isinstance(part, dict)]
                     content = "".join(text_parts)
                 if content:
+                    chunks.append(content)
                     yield content
+            answer = "".join(chunks).strip()
+            logger.info("%s model streamed answer content:\n%s", self.stg.label, answer)
+            logger.info("%s model stream finished: answer_chars=%d finish_reasons=%s response_metadata=%s generation_info=%s", self.stg.label, len(answer), finish_reasons, last_response_metadata, last_generation_info)
+            if finish_reasons and finish_reasons[-1].lower() != "stop":
+                logger.warning("%s model stream ended with non-stop finish_reason=%s", self.stg.label, finish_reasons[-1])
         except Exception as exc:
             logger.exception("%s model LangChain stream failed", self.stg.label)
             raise RemoteModelError(f"{self.stg.label} model stream failed: {exc}") from exc

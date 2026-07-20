@@ -1,4 +1,4 @@
-﻿const { createApp, nextTick, markRaw } = Vue;
+const { createApp, nextTick, markRaw } = Vue;
 
 const CODE_BLOCK_RE = /```([^`\n]*)\n([\s\S]*?)```/g;
 const LANGUAGE_EXTENSIONS = {
@@ -57,10 +57,10 @@ const MONACO_LANGUAGE_ALIASES = {
 };
 const MONACO_THEMES = {
   auto: "跟随系统",
-  "clean-dark": "Clean Dark",
-  "github-light": "GitHub Light",
-  "vs-dark": "VS Dark",
-  vs: "VS Light",
+  "clean-dark": "清爽深色",
+  "github-light": "GitHub 浅色",
+  "vs-dark": "VS 深色",
+  vs: "VS 浅色",
 };
 let customMonacoThemesDefined = false;
 let monacoPromise = null;
@@ -216,7 +216,7 @@ function loadMonacoEditor() {
   monacoPromise = new Promise((resolve, reject) => {
     const start = () => {
       if (!window.require) {
-        reject(new Error("Monaco loader is unavailable"));
+        reject(new Error("代码编辑器加载器不可用"));
         return;
       }
       window.require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
@@ -229,7 +229,7 @@ function loadMonacoEditor() {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js";
     script.onload = start;
-    script.onerror = () => reject(new Error("Failed to load Monaco loader"));
+    script.onerror = () => reject(new Error("代码编辑器加载器加载失败"));
     document.head.appendChild(script);
   });
   return monacoPromise;
@@ -244,13 +244,14 @@ createApp({
       prompt: "",
       modelStatus: "正在连接模型...",
       historyEnabled: false,
+      historyError: "",
       currentConversationId: null,
       conversations: [],
       messages: [
         {
           localId: `welcome-${Date.now()}`,
           role: "assistant",
-          content: "CleanCode Agent 已就绪。你可以直接提出代码需求，生成的代码会显示在右侧代码区。",
+          content: "代码精简助手已就绪。你可以直接提出代码需求，生成的代码会显示在右侧代码区。",
         },
       ],
       workspace: normalizeWorkspace(null),
@@ -332,6 +333,7 @@ createApp({
       if (!host) return;
       try {
         const monaco = await loadMonacoEditor();
+        defineCustomMonacoThemes(monaco);
         this.monacoLoadError = "";
         if (this.codeEditor && this.codeEditor.getContainerDomNode() !== host) {
           this.disposeMonacoEditor();
@@ -361,9 +363,11 @@ createApp({
           });
           this.codeEditorResizeObserver = new ResizeObserver(() => this.codeEditor?.layout());
           this.codeEditorResizeObserver.observe(host);
+          requestAnimationFrame(() => this.codeEditor?.layout());
+          window.setTimeout(() => this.codeEditor?.layout(), 200);
         }
       } catch (error) {
-        this.monacoLoadError = error.message || "Monaco 加载失败";
+        this.monacoLoadError = "代码编辑器加载失败";
       }
     },
     applyMonacoTheme() {
@@ -392,19 +396,21 @@ createApp({
     async loadConversations() {
       try {
         const response = await fetch("/api/conversations");
-        if (!response.ok) throw new Error(`History unavailable: ${response.status}`);
+        if (!response.ok) throw new Error(`历史会话不可用：${response.status}`);
         this.conversations = await response.json();
         this.historyEnabled = true;
+        this.historyError = "";
         if (!this.currentConversationId && this.conversations.length > 0) {
           await this.loadConversation(this.conversations[0].id);
         }
-      } catch {
+      } catch (error) {
         this.historyEnabled = false;
+        this.historyError = `历史会话暂不可用：${error.message || "请检查后端服务或数据库"}`;
       }
     },
     async loadConversation(conversationId) {
       const response = await fetch(`/api/conversations/${conversationId}`);
-      if (!response.ok) throw new Error(`Failed to load conversation: ${response.status}`);
+      if (!response.ok) throw new Error(`加载会话失败：${response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.messages = (data.messages || []).map((message) => ({ ...message, localId: `msg-${message.id}` }));
@@ -412,12 +418,12 @@ createApp({
       this.scrollMessages();
     },
     async deleteConversation(conversation) {
-      const confirmed = window.confirm(`确认删除会话：${conversation.title || "New conversation"}？`);
+      const confirmed = window.confirm(`确认删除会话：${conversation.title || "新会话"}？`);
       if (!confirmed) return;
       const response = await fetch(`/api/conversations/${conversation.id}`, { method: "DELETE" });
       if (!response.ok && response.status !== 404) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `Failed to delete conversation: ${response.status}`);
+        throw new Error(error.detail || `删除会话失败：${response.status}`);
       }
       this.conversations = this.conversations.filter((item) => item.id !== conversation.id);
       if (this.currentConversationId === conversation.id) this.startNewConversation();
@@ -432,7 +438,7 @@ createApp({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      if (!response.ok) throw new Error(`Failed to create conversation: ${response.status}`);
+      if (!response.ok) throw new Error(`创建会话失败：${response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.conversations = [data, ...this.conversations.filter((item) => item.id !== data.id)];
@@ -458,7 +464,7 @@ createApp({
       await this.sendMessage(content);
     },
     async sendMessage(content) {
-      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "生成中..." };
+      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "正在思考..." };
       this.messages.push({ localId: `user-${Date.now()}`, role: "user", content }, loading);
       this.busy = true;
       this.scrollMessages();
@@ -471,7 +477,7 @@ createApp({
           await this.streamPlainChat(loading);
         }
       } catch (error) {
-        loading.content = `Error: ${error.message}`;
+        loading.content = `错误：${error.message}`;
       } finally {
         this.busy = false;
         this.scrollMessages();
@@ -490,7 +496,7 @@ createApp({
       });
       if (!response.ok || !response.body) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `Request failed: ${response.status}`);
+        throw new Error(error.detail || `请求失败：${response.status}`);
       }
       await this.readSse(response, loading, true);
     },
@@ -509,7 +515,7 @@ createApp({
       });
       if (!response.ok || !response.body) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `Request failed: ${response.status}`);
+        throw new Error(error.detail || `请求失败：${response.status}`);
       }
       await this.readSse(response, loading, false);
     },
@@ -534,7 +540,7 @@ createApp({
             loading.content = answer || "生成中...";
             this.scrollMessages();
           } else if (event.type === "error") {
-            throw new Error(event.detail || "Streaming failed");
+            throw new Error(event.detail || "流式请求失败");
           } else if (event.type === "done") {
             doneEvent = event;
           }
@@ -560,7 +566,7 @@ createApp({
         const response = await fetch("/api/model/status");
         const data = await response.json();
         const primaryName = data.primary_model_name || "主模型未配置";
-        const remoteName = data.coder_model_name || "Coder 模型";
+        const remoteName = data.coder_model_name || "代码模型";
         this.modelStatus = data.configured ? `主模型：${primaryName} | Coder：${remoteName}` : `模型状态未知：${primaryName} | ${remoteName}`;
       } catch {
         this.modelStatus = "服务状态未知";
@@ -583,11 +589,11 @@ createApp({
           body: JSON.stringify({ language: "python", code: this.activeFile.content }),
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || `Run failed: ${response.status}`);
+        if (!response.ok) throw new Error(data.detail || `运行失败：${response.status}`);
         const output = [data.stdout, data.stderr].filter(Boolean).join("\n").trim();
-        this.runOutput = output || "No output.";
+        this.runOutput = output || "无输出。";
       } catch (error) {
-        this.runOutput = `Error: ${error.message}`;
+        this.runOutput = `错误：${error.message}`;
       } finally {
         this.running = false;
       }
@@ -620,12 +626,4 @@ createApp({
     });
   },
 }).mount("#app");
-
-
-
-
-
-
-
-
 

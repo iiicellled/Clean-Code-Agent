@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 
 from ..config import settings
-from ..model_service import coder_chat_model, primary_chat_model
+from ..model_service import RemoteModelError, coder_chat_model, primary_chat_model
 from ..schemas import ChatMessage
 from . import chatbot_service, code_review_service, coder_service, intent_service
 from .intent_service import ActiveTaskState, IntentDecision
@@ -56,11 +56,18 @@ def handle_chat(
             return IntentChatResult(content=content, decision=decision, executed=False)
 
         raw_code = coder_service.generate_code(decision, messages)
-        content = code_review_service.review_and_present_code(
-            decision=decision,
-            messages=messages,
-            raw_code=raw_code,
-        )
+        try:
+            content = code_review_service.review_and_present_code(
+                decision=decision,
+                messages=messages,
+                raw_code=raw_code,
+            )
+        except RemoteModelError:
+            logger.exception("Code review model failed; returning raw coder output")
+            content = raw_code.strip()
+        if not content:
+            logger.warning("Code review model returned an empty answer; returning raw coder output")
+            content = raw_code.strip()
         return IntentChatResult(content=content, decision=decision, executed=True)
 
     content = chatbot_service.chat(messages)
@@ -77,7 +84,10 @@ def stream_handle_chat(
         for chunk in coder_chat_model.stream_chat(messages, cfg=CODER_CONFIG):
             chunks.append(chunk)
             yield IntentStreamEvent(content=chunk)
-        yield IntentStreamEvent(result=IntentChatResult(content="".join(chunks), decision=None, executed=True))
+        content = "".join(chunks).strip()
+        if not content:
+            raise RemoteModelError("coder model returned an empty answer")
+        yield IntentStreamEvent(result=IntentChatResult(content=content, decision=None, executed=True))
         return
 
     decision = _decide_intent(messages, active_task)
@@ -94,21 +104,35 @@ def stream_handle_chat(
 
         raw_code = coder_service.generate_code(decision, messages)
         chunks: list[str] = []
-        for chunk in code_review_service.stream_review_and_present_code(
-            decision=decision,
-            messages=messages,
-            raw_code=raw_code,
-        ):
-            chunks.append(chunk)
-            yield IntentStreamEvent(content=chunk)
-        yield IntentStreamEvent(result=IntentChatResult(content="".join(chunks), decision=decision, executed=True))
+        review_failed = False
+        try:
+            for chunk in code_review_service.stream_review_and_present_code(
+                decision=decision,
+                messages=messages,
+                raw_code=raw_code,
+            ):
+                chunks.append(chunk)
+                yield IntentStreamEvent(content=chunk)
+        except RemoteModelError:
+            review_failed = True
+            logger.exception("Code review model failed; returning raw coder output")
+        content = "".join(chunks).strip()
+        if not content:
+            if not review_failed:
+                logger.warning("Code review model returned an empty answer; returning raw coder output")
+            content = raw_code.strip()
+            yield IntentStreamEvent(content=content)
+        yield IntentStreamEvent(result=IntentChatResult(content=content, decision=decision, executed=True))
         return
 
     chunks = []
     for chunk in chatbot_service.stream_chat(messages):
         chunks.append(chunk)
         yield IntentStreamEvent(content=chunk)
-    yield IntentStreamEvent(result=IntentChatResult(content="".join(chunks), decision=decision, executed=False))
+    content = "".join(chunks).strip()
+    if not content:
+        raise RemoteModelError("primary model returned an empty answer")
+    yield IntentStreamEvent(result=IntentChatResult(content=content, decision=decision, executed=False))
 
 
 def stream_chat(

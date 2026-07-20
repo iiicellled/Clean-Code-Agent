@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light dark;
   --bg: #f5f6f8;
   --panel: #ffffff;
@@ -355,6 +355,15 @@ textarea:focus {
   font-size: 12px;
 }
 
+
+.fallback-code-editor {
+  resize: none;
+  color: var(--code-text);
+  font: 13px/1.55 Consolas, "SFMono-Regular", monospace;
+  padding: 12px;
+  tab-size: 4;
+  white-space: pre;
+}
 .empty-code-state {
   display: grid;
   place-content: center;
@@ -396,6 +405,7 @@ textarea:focus {
 .message-body {
   font-size: 14px;
 }
+
 
 .markdown-body {
   color: var(--text);
@@ -561,7 +571,4 @@ textarea:focus {
     background: #0c1116;
   }
 }
-
-
-
 
