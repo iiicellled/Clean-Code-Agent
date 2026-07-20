@@ -9,7 +9,7 @@
 ## 当前状态
 
 - 主模型：`Qwen3.7-Max`
-- 远程 coder 模型：`output_models/qwen-coder-simplifier-dpo-merged`
+- 远程 coder 模型：`cleancode_qwen/output_models/qwen-coder-simplifier-dpo-merged`
 - 模型来源：[iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen)
 - 后端框架：FastAPI
 - 推理服务：vLLM + OpenAI-compatible `/v1/chat/completions`
@@ -31,14 +31,14 @@
 coder 模型实际部署的是 Clean-Code-Qwen merge 后的完整模型：
 
 ```text
-output_models/qwen-coder-simplifier-dpo-merged
+cleancode_qwen/output_models/qwen-coder-simplifier-dpo-merged
 ```
 
 默认情况下，`MODEL_ROUTING_ENABLED=false`，用户请求会直接发送给 coder 模型。开启 `MODEL_ROUTING_ENABLED=true` 后，后端会先调用主模型做意图识别，再根据识别结果决定是否进入代码生成链路。
 
 ### 2. 后端 Agent 流程
 
-开启路由后，一次写代码请求的大致流程如下：
+开启路由后，一次对话请求的大致流程如下：
 
 ```mermaid
 flowchart TD
@@ -103,7 +103,7 @@ unknown
 
 ### 4. 主模型如何告知 coder 模型
 
-主模型和 coder 模型之间不是直接互相通信，而是通过后端的结构化中间层衔接：
+主模型和 coder 模型之间是通过后端的结构化中间层衔接：
 
 1. `intent_service` 调用主模型，得到 `IntentDecision`。
 2. `model_router_service` 判断 `IntentDecision.ready_to_execute`。
@@ -314,7 +314,7 @@ vllm
 
 ### 1. 准备 Clean-Code-Qwen 模型
 
-本项目基于已经发布的 Clean-Code-Qwen（需要先将 LoRA adapter 合并为完整模型）。
+本项目基于已经发布的 Clean-Code-Qwen，需要将 LoRA adapter 合并为完整模型。
 
 默认训练产物：
 
@@ -352,7 +352,7 @@ pip install -r requirements.txt
 使用 merged 模型启动服务：
 
 ```bash
-cd sft_lora_coder
+cd cleancode_qwen
 uvicorn serve_remote_vllm:app --host 127.0.0.1 --port 9000 --log-level info --no-access-log
 ```
 
@@ -375,7 +375,7 @@ pip install -r requirements.txt
 # Remote Clean-Code-Qwen served by vLLM
 CODER_MODEL_URL=http://127.0.0.1:9000/v1/chat/completions
 CODER_MODEL_NAME=qwen-coder-simplifier-dpo-merged
-CODER_API_KEY=change-me
+CODER_API_KEY=change-me-into-your-coder-api-key
 CODER_TIMEOUT_SECONDS=300
 VERIFY_CODER_TLS=true
 
@@ -492,7 +492,7 @@ POST /api/code/run
 
 ## 与 Clean-Code-Qwen 的关系
 
-- `Clean Code Qwen` 保存训练、评测、merge 和远程部署脚本，并提供经过 SFT + DPO 优化的 Qwen2.5-Coder 模型。
+- `Clean Code Qwen` 保存训练、评测、merge 和远程部署脚本，并提供经过 SFT + DPO 优化的 `Qwen2.5-Coder-7B-Instruct` 模型。
 - `Clean Code Agent` 使用 merge 后的模型作为远程 coder 后端，并实现应用层 agent 能力。
 
 整体流程为：
