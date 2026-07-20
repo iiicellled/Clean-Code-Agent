@@ -324,10 +324,16 @@ output_models/qwen-coder-simplifier-lora
 output_models/qwen-coder-simplifier-dpo-lora
 ```
 
-执行 merge：
+在远程 Linux GPU 服务器上安装依赖：
 
 ```bash
 cd cleancode_qwen
+pip install -r requirements.txt
+```
+
+执行 merge：
+
+```bash
 python merge_lora.py \
   --base-model models/Qwen2.5-Coder-7B-Instruct \
   --sft-adapter output_models/qwen-coder-simplifier-lora \
@@ -342,17 +348,9 @@ python merge_lora.py \
 
 ### 2. 启动远程 vLLM 服务
 
-在远程 Linux GPU 服务器上安装依赖：
-
-```bash
-cd cleancode_qwen
-pip install -r requirements.txt
-```
-
 使用 merged 模型启动服务：
 
 ```bash
-cd cleancode_qwen
 uvicorn serve_remote_vllm:app --host 127.0.0.1 --port 9000 --log-level info --no-access-log
 ```
 
@@ -509,7 +507,6 @@ vLLM 服务 -> Clean Code Agent 后端 -> Web 页面/API
 - 内置代码运行目前只支持 Python。
 - Python 运行器用于基本验证，不是完整安全沙箱。
 - 会话历史依赖外部数据库，不配置 `DATABASE_URL` 时不会保存历史。
-- `MODEL_ROUTING_ENABLED` 默认关闭；开启后需要额外配置主模型。
 - `serve_remote.py` 当前可以接受 `stream: true`，但具体是否逐 token 输出取决于远程服务实现。
 
 ## 后续计划
