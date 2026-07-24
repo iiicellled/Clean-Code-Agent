@@ -443,16 +443,10 @@ docker desktop status
 docker run hello-world
 ```
 
-后端启动示例：
+启动后端：
 
 ```powershell
-uvicorn app.main:app --host 127.0.0.1 --port 8001
-```
-
-如果 `8001` 被 Windows、Docker 或 WSL 预留/占用，可以换端口，例如：
-
-```powershell
-uvicorn app.main:app --host 127.0.0.1 --port 8010
+uvicorn app.main:app --host 127.0.0.1 --port 18001
 ```
 
 ## API
