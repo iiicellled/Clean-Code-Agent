@@ -391,13 +391,13 @@ DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/coder_agent?charset=ut
 启动后端和页面：
 
 ```powershell
-uvicorn app.main:app --host 127.0.0.1 --port 8001
+uvicorn app.main:app --host 127.0.0.1 --port 18001
 ```
 
 访问：
 
 ```text
-http://127.0.0.1:8001
+http://127.0.0.1:18001
 ```
 
 ## Docker 代码运行
@@ -436,17 +436,11 @@ CODE_RUNNER_DOCKER_PIDS_LIMIT=64
 CODE_RUNNER_BACKEND=local
 ```
 
-启动后端前建议先确认 Docker 正常：
+启动后端前务必先确认 Docker 正常：
 
 ```powershell
 docker desktop status
 docker run hello-world
-```
-
-启动后端：
-
-```powershell
-uvicorn app.main:app --host 127.0.0.1 --port 18001
 ```
 
 ## API
