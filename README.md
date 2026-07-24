@@ -548,7 +548,6 @@ vLLM 服务 -> Clean Code Agent 后端 -> Web 页面/API
 ## 当前限制
 
 - 内置代码运行目前只支持 Python。
-- Python 运行器用于基本验证，不是完整安全沙箱。
 - 会话历史依赖外部数据库，不配置 `DATABASE_URL` 时不会保存历史。
 - `serve_remote.py` 当前可以接受 `stream: true`，但具体是否逐 token 输出取决于远程服务实现。
 
@@ -557,5 +556,4 @@ vLLM 服务 -> Clean Code Agent 后端 -> Web 页面/API
 - 增加多文件项目级代码修改能力
 - 增加测试生成与自动运行
 - 增加 Git diff 展示和补丁应用
-- 增加更严格的代码运行沙箱
 - 增加更多语言的运行支持
