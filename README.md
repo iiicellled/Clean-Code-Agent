@@ -400,6 +400,61 @@ uvicorn app.main:app --host 127.0.0.1 --port 8001
 http://127.0.0.1:8001
 ```
 
+## Docker 代码运行
+
+Web 右侧代码区通过后端接口 `POST /api/code/run` 执行 Python。默认执行后端为 Docker：后端会把用户代码写入一次性临时目录，再使用 `docker run --rm` 启动隔离容器运行脚本，而不是直接调用宿主机 Python。
+
+默认容器运行策略：
+- 镜像：`python:3.12-slim`
+- 工作目录：容器内 `/workspace`
+- 代码挂载：临时目录只读挂载到容器
+- 网络：默认 `--network none`
+- 资源限制：默认 `256m` 内存、`1` CPU、`64` pids
+- 超时：沿用接口请求里的 `timeout_seconds`
+- 输出：stdout/stderr 会按长度截断，避免前端被超大输出卡住
+
+首次使用前需要安装并启动 Docker Desktop，然后拉取默认镜像：
+
+```powershell
+docker pull python:3.12-slim
+```
+
+`.env` 中可配置代码运行后端：
+
+```env
+CODE_RUNNER_BACKEND=docker
+CODE_RUNNER_DOCKER_IMAGE=python:3.12-slim
+CODE_RUNNER_DOCKER_NETWORK=none
+CODE_RUNNER_DOCKER_MEMORY=256m
+CODE_RUNNER_DOCKER_CPUS=1
+CODE_RUNNER_DOCKER_PIDS_LIMIT=64
+```
+
+如果本机暂时没有 Docker，开发调试时可以切回本地 Python：
+
+```env
+CODE_RUNNER_BACKEND=local
+```
+
+启动后端前建议先确认 Docker 正常：
+
+```powershell
+docker desktop status
+docker run hello-world
+```
+
+后端启动示例：
+
+```powershell
+uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+如果 `8001` 被 Windows、Docker 或 WSL 预留/占用，可以换端口，例如：
+
+```powershell
+uvicorn app.main:app --host 127.0.0.1 --port 8010
+```
+
 ## API
 
 ### 状态接口

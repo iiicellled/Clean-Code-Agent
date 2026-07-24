@@ -48,5 +48,12 @@ class Settings:
 
     verify_coder_tls: bool = _bool_from_env("VERIFY_CODER_TLS", True)
 
+    code_runner_backend: str = os.getenv("CODE_RUNNER_BACKEND", "docker").strip().lower()
+    code_runner_docker_image: str = os.getenv("CODE_RUNNER_DOCKER_IMAGE", "python:3.12-slim")
+    code_runner_docker_network: str = os.getenv("CODE_RUNNER_DOCKER_NETWORK", "none")
+    code_runner_docker_memory: str = os.getenv("CODE_RUNNER_DOCKER_MEMORY", "256m")
+    code_runner_docker_cpus: str = os.getenv("CODE_RUNNER_DOCKER_CPUS", "1")
+    code_runner_docker_pids_limit: int = int(os.getenv("CODE_RUNNER_DOCKER_PIDS_LIMIT", "64"))
+
 
 settings = Settings()
