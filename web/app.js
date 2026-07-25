@@ -65,6 +65,13 @@ const MONACO_THEMES = {
 let customMonacoThemesDefined = false;
 let monacoPromise = null;
 
+const LOCAL_TEXT_FILE_EXTENSIONS = new Set([
+  "bat", "c", "cfg", "cpp", "cs", "css", "env", "go", "h", "html", "ini", "java", "js", "json", "jsx",
+  "kt", "less", "md", "php", "py", "rb", "rs", "scss", "sh", "sql", "ts", "tsx", "txt", "vue", "xml", "yaml", "yml"
+]);
+const LOCAL_DIRECTORY_SKIP_NAMES = new Set([".git", ".idea", ".vscode", "__pycache__", "node_modules", "dist", "build", "venv", ".venv"]);
+const LOCAL_FILE_SCAN_LIMIT = 300;
+
 function normalizeLatexBlockMath(content) {
   return content.replace(/(\$\$|\\\[)([\s\S]*?)(\$\$|\\\])/g, (match, open, body, close) => {
     const normalizedBody = body.replace(/(^|[^\\])\\\s*$/gm, "$1\\\\");
@@ -90,6 +97,49 @@ function renderMarkdown(content) {
   return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true }, ADD_ATTR: ["class"] });
 }
 
+function languageLabelForCodeBlock(code) {
+  const className = String(code.className || "");
+  const match = className.match(/(?:^|\s)language-([^\s]+)/) || className.match(/(?:^|\s)lang-([^\s]+)/);
+  return (match?.[1] || "text").replace(/^plaintext$/, "text");
+}
+
+function enhanceCodeBlocks(root = document) {
+  root.querySelectorAll(".markdown-body pre").forEach((pre) => {
+    if (pre.closest(".code-block-shell")) return;
+    const code = pre.querySelector("code");
+    if (!code) return;
+    const shell = document.createElement("div");
+    shell.className = "code-block-shell";
+    const header = document.createElement("div");
+    header.className = "code-block-header";
+    const language = document.createElement("span");
+    language.className = "code-block-language";
+    language.textContent = languageLabelForCodeBlock(code);
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "code-block-copy";
+    copyButton.innerHTML = '<i class="fa-regular fa-copy"></i>';
+    copyButton.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(code.innerText || code.textContent || "");
+      copyButton.innerHTML = '<i class="fa-solid fa-copy"></i>';
+      window.setTimeout(() => {
+        copyButton.innerHTML = '<i class="fa-regular fa-copy"></i>';
+      }, 1200);
+    });
+    header.append(language, copyButton);
+    pre.parentNode.insertBefore(shell, pre);
+    shell.append(header, pre);
+  });
+}
+
+function highlightCodeBlocks(root = document) {
+  if (window.hljs) {
+    root.querySelectorAll("pre code:not(.hljs)").forEach((block) => {
+      window.hljs.highlightElement(block);
+    });
+  }
+  enhanceCodeBlocks(root);
+}
 function stripCodeBlocks(content) {
   return String(content || "").replace(CODE_BLOCK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -142,7 +192,6 @@ function normalizeWorkspace(workspace) {
   return {
     files: normalized,
     active_file: workspace?.active_file || normalized[0]?.path || null,
-    snapshot_id: workspace?.snapshot_id || null,
   };
 }
 
@@ -154,6 +203,48 @@ function languageFromFile(file) {
   return MONACO_LANGUAGE_ALIASES[suffix] || "plaintext";
 }
 
+function isLocalTextFilePath(path) {
+  const name = String(path || "").split("/").pop() || "";
+  if ([".env", ".gitignore"].includes(name)) return true;
+  const suffix = name.includes(".") ? name.split(".").pop().toLowerCase() : "";
+  return LOCAL_TEXT_FILE_EXTENSIONS.has(suffix);
+}
+
+function languageFromPath(path) {
+  return languageFromFile({ path, language: "" });
+}
+
+async function collectLocalTextFiles(directoryHandle, prefix = "", result = []) {
+  if (result.length >= LOCAL_FILE_SCAN_LIMIT) return result;
+  const entries = [];
+  for await (const [name, handle] of directoryHandle.entries()) {
+    entries.push([name, handle]);
+  }
+  entries.sort(([aName, aHandle], [bName, bHandle]) => {
+    if (aHandle.kind !== bHandle.kind) return aHandle.kind === "directory" ? -1 : 1;
+    return aName.localeCompare(bName);
+  });
+  for (const [name, handle] of entries) {
+    if (result.length >= LOCAL_FILE_SCAN_LIMIT) break;
+    const path = prefix ? `${prefix}/${name}` : name;
+    if (handle.kind === "directory") {
+      if (!LOCAL_DIRECTORY_SKIP_NAMES.has(name)) await collectLocalTextFiles(handle, path, result);
+    } else if (isLocalTextFilePath(path)) {
+      result.push({ path, name });
+    }
+  }
+  return result;
+}
+
+async function getFileHandleByPath(directoryHandle, path) {
+  const parts = String(path || "").split("/").filter(Boolean);
+  if (!parts.length) throw new Error("No file selected");
+  let current = directoryHandle;
+  for (const part of parts.slice(0, -1)) {
+    current = await current.getDirectoryHandle(part);
+  }
+  return current.getFileHandle(parts.at(-1));
+}
 function resolveMonacoTheme(theme) {
   if (theme && theme !== "auto") return theme;
   return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "clean-dark" : "github-light";
@@ -261,6 +352,18 @@ createApp({
       suppressEditorChange: false,
       monacoLoadError: "",
       codeTheme: localStorage.getItem("coderAgent.codeTheme") || "auto",
+      workspaceRoot: "",
+      workspaceStatus: "",
+      workspaceEntries: [],
+      selectedWorkspaceFile: "",
+      workspaceDirectoryHandle: null,
+      fileHandlesByPath: markRaw(new Map()),
+      openingWorkspace: false,
+      openingFile: false,
+      savingFile: false,
+      patchProposal: null,
+      patchStatus: "",
+      supportsLocalDirectoryPicker: !!window.showDirectoryPicker,
     };
   },
   computed: {
@@ -285,9 +388,7 @@ createApp({
       return value ? new Date(value).toLocaleString() : "";
     },
     renderAssistantContent(content) {
-      const files = parseCodeBlocks(content);
-      const text = stripCodeBlocks(content) || (files.length ? "已生成代码，如右侧代码区所示。" : content);
-      return renderMarkdown(text);
+      return renderMarkdown(content || "");
     },
     scrollMessages() {
       nextTick(() => {
@@ -308,6 +409,64 @@ createApp({
     updateActiveFile(content) {
       const file = this.activeFile;
       if (file) file.content = content;
+    },
+    mergeWorkspaceFile(file) {
+      if (!file) return;
+      const normalized = normalizeWorkspace({ files: [file], active_file: file.path });
+      const nextFile = normalized.files[0];
+      const existing = this.workspace.files.find((item) => item.path === nextFile.path);
+      if (existing) {
+        existing.language = nextFile.language;
+        existing.content = nextFile.content;
+      } else {
+        this.workspace.files.push(nextFile);
+      }
+      this.workspace.active_file = nextFile.path;
+      this.runOutput = "";
+      this.syncEditorToActiveFile();
+    },
+    closeWorkspaceFile(path) {
+      this.flushEditorToActiveFile();
+      const index = this.workspace.files.findIndex((file) => file.path === path);
+      if (index < 0) return;
+      const wasActive = this.workspace.active_file === path;
+      this.workspace.files.splice(index, 1);
+      this.fileHandlesByPath.delete(path);
+      if (wasActive) {
+        const nextFile = this.workspace.files[index] || this.workspace.files[index - 1] || null;
+        this.workspace.active_file = nextFile?.path || null;
+        this.runOutput = "";
+        if (nextFile) {
+          this.syncEditorToActiveFile();
+        } else {
+          this.disposeMonacoEditor();
+        }
+      }
+    },
+    applyPatchProposal() {
+      this.flushEditorToActiveFile();
+      const patch = this.patchProposal;
+      if (!patch || !this.activeFile || this.activeFile.path !== patch.file_path) {
+        this.patchStatus = "Patch 不适用于当前文件";
+        return;
+      }
+      const content = this.activeFile.content || "";
+      const count = content.split(patch.old).length - 1;
+      if (count !== 1) {
+        this.patchStatus = `Patch expected one match, found ${count}.`;
+        return;
+      }
+      this.activeFile.content = content.replace(patch.old, patch.new);
+      this.patchProposal = null;
+      this.patchStatus = "Patch 已应用于编辑器，请保存以覆写文件";
+      this.syncEditorToActiveFile();
+    },
+    discardPatchProposal() {
+      this.patchProposal = null;
+      this.patchStatus = "";
+    },
+    clearRunOutput() {
+      this.runOutput = "";
     },
     currentFilesPayload() {
       this.flushEditorToActiveFile();
@@ -405,7 +564,7 @@ createApp({
         }
       } catch (error) {
         this.historyEnabled = false;
-        this.historyError = `历史会话暂不可用：${error.message || "请检查后端服务或数据库"}`;
+        this.historyError = `数据库会话不可用：${error.message || "请检查 DATABASE_URL 和后端服务"}`;
       }
     },
     async loadConversation(conversationId) {
@@ -414,7 +573,6 @@ createApp({
       const data = await response.json();
       this.currentConversationId = data.id;
       this.messages = (data.messages || []).map((message) => ({ ...message, localId: `msg-${message.id}` }));
-      this.setWorkspace(data.workspace);
       this.scrollMessages();
     },
     async deleteConversation(conversation) {
@@ -451,6 +609,65 @@ createApp({
       this.runOutput = "";
       this.prompt = "";
     },
+    async loadWorkspaceStatus() {
+      this.workspaceStatus = this.supportsLocalDirectoryPicker ? "" : "当前浏览器不支持文件选择器; 请使用 Chrome 或 Edge.";
+    },
+    async chooseWorkspaceDirectory() {
+      if (!this.supportsLocalDirectoryPicker || this.openingWorkspace) return;
+      this.openingWorkspace = true;
+      this.workspaceStatus = "打开文件夹...";
+      try {
+        const handle = await window.showDirectoryPicker({ mode: "readwrite" });
+        this.workspaceDirectoryHandle = markRaw(handle);
+        this.fileHandlesByPath = markRaw(new Map());
+        this.workspaceRoot = handle.name || "Selected folder";
+        this.workspaceEntries = await collectLocalTextFiles(handle);
+        this.selectedWorkspaceFile = this.workspaceEntries[0]?.path || "";
+        this.workspaceStatus = this.workspaceEntries.length
+          ? `已选择: ${this.workspaceRoot} (含 ${this.workspaceEntries.length} 个文件)`
+          : `已选择: ${this.workspaceRoot} (未找到文件)`;
+      } catch (error) {
+        this.workspaceStatus = error?.name === "AbortError" ? "取消选择文件夹." : `Error: ${error.message}`;
+      } finally {
+        this.openingWorkspace = false;
+      }
+    },
+    async openSelectedWorkspaceFile() {
+      const path = this.selectedWorkspaceFile;
+      if (!path || !this.workspaceDirectoryHandle || this.openingFile) return;
+      this.openingFile = true;
+      this.workspaceStatus = "打开文件...";
+      try {
+        const handle = await getFileHandleByPath(this.workspaceDirectoryHandle, path);
+        const file = await handle.getFile();
+        const content = await file.text();
+        this.fileHandlesByPath.set(path, markRaw(handle));
+        this.mergeWorkspaceFile({ path, language: languageFromPath(path), content });
+        this.workspaceStatus = `打开文件: ${path}`;
+      } catch (error) {
+        this.workspaceStatus = `Error: ${error.message}`;
+      } finally {
+        this.openingFile = false;
+      }
+    },
+    async saveActiveFile() {
+      this.flushEditorToActiveFile();
+      if (!this.activeFile || this.savingFile) return;
+      this.savingFile = true;
+      this.workspaceStatus = "Saving file...";
+      try {
+        const handle = this.fileHandlesByPath.get(this.activeFile.path);
+        if (!handle) throw new Error("This file was not opened from a selected folder.");
+        const writable = await handle.createWritable();
+        await writable.write(this.activeFile.content || "");
+        await writable.close();
+        this.workspaceStatus = `保存文件: ${this.activeFile.path}`;
+      } catch (error) {
+        this.workspaceStatus = `Error: ${error.message}`;
+      } finally {
+        this.savingFile = false;
+      }
+    },
     handleComposerKeydown(event) {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
@@ -469,15 +686,14 @@ createApp({
       this.busy = true;
       this.scrollMessages();
       try {
-        if (this.historyEnabled) {
-          const conversation = await this.ensureConversation();
-          await this.streamConversationChat(conversation.id, content, loading);
-          await this.loadConversations();
-        } else {
-          await this.streamPlainChat(loading);
+        if (!this.historyEnabled) {
+          throw new Error(this.historyError || '数据库会话不可用，请先配置 DATABASE_URL。');
         }
+        const conversation = await this.ensureConversation();
+        await this.streamConversationChat(conversation.id, content, loading);
+        await this.loadConversations();
       } catch (error) {
-        loading.content = `错误：${error.message}`;
+        loading.content = `Error: ${error.message}`;
       } finally {
         this.busy = false;
         this.scrollMessages();
@@ -500,25 +716,6 @@ createApp({
       }
       await this.readSse(response, loading, true);
     },
-    async streamPlainChat(loading) {
-      const response = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: this.messages
-            .filter((message) => message !== loading)
-            .filter((message) => message.role === "user" || message.role === "assistant")
-            .map(({ role, content }) => ({ role, content })),
-          current_files: this.currentFilesPayload(),
-          active_file: this.workspace.active_file,
-        }),
-      });
-      if (!response.ok || !response.body) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `请求失败：${response.status}`);
-      }
-      await this.readSse(response, loading, false);
-    },
     async readSse(response, loading, hasConversationEvents) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -537,7 +734,7 @@ createApp({
             this.currentConversationId = event.conversation.id;
           } else if (event.type === "delta") {
             answer += event.content || "";
-            loading.content = answer || "生成中...";
+            loading.content = answer || "Generating...";
             this.scrollMessages();
           } else if (event.type === "error") {
             throw new Error(event.detail || "流式请求失败");
@@ -546,20 +743,15 @@ createApp({
           }
         }
       }
-
-      const clientFiles = parseCodeBlocks(answer);
       if (doneEvent?.message?.content) {
         loading.content = doneEvent.message.content;
         loading.id = doneEvent.message.id;
       } else {
-        loading.content = stripCodeBlocks(answer) || (clientFiles.length ? "已生成代码，如右侧代码区所示。" : "模型返回为空。");
+        loading.content = answer || "Empty response.";
       }
       if (doneEvent?.conversation?.id) this.currentConversationId = doneEvent.conversation.id;
-      if (doneEvent?.workspace) {
-        this.setWorkspace(doneEvent.workspace);
-      } else if (!hasConversationEvents && clientFiles.length) {
-        this.setWorkspace({ files: clientFiles, active_file: clientFiles[0].path });
-      }
+      this.patchProposal = doneEvent?.patch || null;
+      this.patchStatus = this.patchProposal ? "Patch 提议已就绪." : this.patchStatus;
     },
     async refreshStatus() {
       try {
@@ -601,6 +793,7 @@ createApp({
   },
   mounted() {
     this.loadConversations();
+    this.loadWorkspaceStatus();
     this.refreshStatus();
   },
   beforeUnmount() {
@@ -609,6 +802,7 @@ createApp({
   updated() {
     nextTick(() => {
       if (this.activeFile) this.ensureMonacoEditor();
+      highlightCodeBlocks(document);
       if (window.renderMathInElement) {
         document.querySelectorAll(".markdown-body").forEach((node) => {
           renderMathInElement(node, {

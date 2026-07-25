@@ -18,23 +18,19 @@ class CodeFile(BaseModel):
 class WorkspaceState(BaseModel):
     files: list[CodeFile] = Field(default_factory=list)
     active_file: str | None = Field(default=None, max_length=260)
-    snapshot_id: int | None = None
+
+
+class CodePatchProposal(BaseModel):
+    file_path: str = Field(min_length=1, max_length=260)
+    summary: str = Field(default="", max_length=1000)
+    old: str = Field(min_length=1, max_length=200000)
+    new: str = Field(min_length=1, max_length=200000)
 
 
 class ChatMessage(BaseModel):
     role: Role
     content: str = Field(min_length=1)
 
-
-class ChatRequest(BaseModel):
-    messages: list[ChatMessage] = Field(min_length=1)
-    current_files: list[CodeFile] = Field(default_factory=list)
-    active_file: str | None = Field(default=None, max_length=260)
-
-
-class ChatResponse(BaseModel):
-    message: ChatMessage
-    workspace: WorkspaceState | None = None
 
 
 class ModelStatus(BaseModel):
@@ -57,7 +53,6 @@ class ConversationCreate(BaseModel):
 class StoredMessage(ChatMessage):
     id: int
     created_at: datetime
-    code_snapshot_id: int | None = None
 
 
 class ConversationSummary(BaseModel):
@@ -82,6 +77,7 @@ class ConversationChatResponse(BaseModel):
     conversation: ConversationSummary
     message: StoredMessage
     workspace: WorkspaceState | None = None
+    patch: CodePatchProposal | None = None
 
 
 class CodeRunRequest(BaseModel):

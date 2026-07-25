@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..model_service import RemoteModelError
-from ..models import CodeSnapshot, Conversation, ConversationTask, Message
+from ..models import Conversation, ConversationTask, Message
 from ..schemas import (
     ChatMessage,
     CodeFile,
@@ -22,7 +22,8 @@ from ..schemas import (
     StoredMessage,
     WorkspaceState,
 )
-from . import intent_service, model_router_service
+from . import intent_service, model_router_service, patch_service
+from ..tools import current_file_search_tool
 
 
 logging.basicConfig(level=logging.INFO)
@@ -79,7 +80,7 @@ def _sync_task_state(
     result: model_router_service.IntentChatResult,
 ) -> None:
     decision = result.decision
-    if decision is None or decision.intent != "write_code":
+    if decision is None or not intent_service.is_code_intent(decision.intent):
         return
 
     if decision.missing_slots:
@@ -115,23 +116,12 @@ def conversation_summary(conversation: Conversation) -> ConversationSummary:
     )
 
 
-def _message_snapshot_id(db: Session, message_id: int) -> int | None:
-    snapshot = db.scalar(
-        select(CodeSnapshot)
-        .where(CodeSnapshot.message_id == message_id)
-        .order_by(CodeSnapshot.id.desc())
-        .limit(1)
-    )
-    return snapshot.id if snapshot else None
-
-
-def stored_message(message: Message, db: Session | None = None) -> StoredMessage:
+def stored_message(message: Message) -> StoredMessage:
     return StoredMessage(
         id=message.id,
         role=message.role,  # type: ignore[arg-type]
         content=message.content,
         created_at=message.created_at,
-        code_snapshot_id=_message_snapshot_id(db, message.id) if db is not None else None,
     )
 
 
@@ -166,53 +156,6 @@ def _language_from_path(path: str) -> str:
     return "text"
 
 
-def _path_for_code_block(info: str, index: int) -> tuple[str, str]:
-    tokens = [token for token in info.strip().split() if token]
-    language = (tokens[0].lower() if tokens else "text").strip("{}[]()") or "text"
-    path = next((token for token in tokens[1:] if "." in token or "/" in token or "\\" in token), "")
-    if not path:
-        extension = LANG_EXTENSIONS.get(language, "txt")
-        path = f"generated_{index}.{extension}"
-    return path, language
-
-
-def extract_code_files(content: str) -> list[dict]:
-    files: list[dict] = []
-    for index, match in enumerate(CODE_BLOCK_RE.finditer(content), start=1):
-        info = match.group(1) or ""
-        code = match.group(2).strip("\n")
-        if not code.strip():
-            continue
-        path, language = _path_for_code_block(info, index)
-        files.append(_normalise_file({"path": path, "language": language, "content": code}))
-    return files
-
-
-def strip_code_blocks(content: str) -> str:
-    cleaned = CODE_BLOCK_RE.sub("", content)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned
-
-
-def _latest_snapshot(db: Session, conversation_id: int) -> CodeSnapshot | None:
-    return db.scalar(
-        select(CodeSnapshot)
-        .where(CodeSnapshot.conversation_id == conversation_id)
-        .order_by(CodeSnapshot.id.desc())
-        .limit(1)
-    )
-
-
-def _workspace_from_snapshot(snapshot: CodeSnapshot | None) -> WorkspaceState | None:
-    if snapshot is None:
-        return None
-    return WorkspaceState(
-        files=[CodeFile(**file) for file in _normalise_files(snapshot.files_json or [])],
-        active_file=snapshot.active_file,
-        snapshot_id=snapshot.id,
-    )
-
-
 def _request_workspace(request: ConversationChatRequest) -> WorkspaceState | None:
     files = _normalise_files(request.current_files)
     if not files:
@@ -221,41 +164,25 @@ def _request_workspace(request: ConversationChatRequest) -> WorkspaceState | Non
     return WorkspaceState(files=[CodeFile(**file) for file in files], active_file=active_file)
 
 
-def _save_snapshot(
-    db: Session,
-    conversation_id: int,
-    files: list[CodeFile] | list[dict],
-    active_file: str | None,
-    created_by: str,
-    message_id: int | None = None,
-) -> CodeSnapshot | None:
-    normalised = _normalise_files(files)
-    if not normalised:
-        return None
-    snapshot = CodeSnapshot(
-        conversation_id=conversation_id,
-        message_id=message_id,
-        files_json=normalised,
-        active_file=active_file or normalised[0]["path"],
-        created_by=created_by,
-    )
-    db.add(snapshot)
-    db.flush()
-    return snapshot
 
-
-def _workspace_context_message(workspace: WorkspaceState | None) -> ChatMessage | None:
+def _workspace_context_message(
+    workspace: WorkspaceState | None,
+    latest_user: str = "",
+    preferred_symbols: list[str] | None = None,
+) -> ChatMessage | None:
     if workspace is None or not workspace.files:
         return None
-    file_chunks = []
-    for file in workspace.files:
-        file_chunks.append(
-            f"File: {file.path}\nLanguage: {file.language}\n```{file.language}\n{file.content}\n```"
-        )
-    active = workspace.active_file or workspace.files[0].path
+    search_result = current_file_search_tool.search_current_file(
+        workspace,
+        latest_user,
+        preferred_symbols=preferred_symbols,
+    )
+    tool_text = current_file_search_tool.format_tool_result(search_result)
     content = (
-        "Current editable code workspace. Treat this as the source of truth for any code changes. "
-        f"Active file: {active}\n\n" + "\n\n".join(file_chunks)
+        "Current editable code workspace. Treat the tool result below as the source of truth for code changes. "
+        "The tool only searched the current active file. If you propose changes, prefer replacing one complete function or inserting a focused function block."
+        "\n\n"
+        + tool_text
     )
     return ChatMessage(role="system", content=content)
 
@@ -263,8 +190,8 @@ def _workspace_context_message(workspace: WorkspaceState | None) -> ChatMessage 
 def conversation_detail(conversation: Conversation, db: Session | None = None) -> ConversationDetail:
     return ConversationDetail(
         **conversation_summary(conversation).model_dump(),
-        messages=[stored_message(message, db) for message in conversation.messages],
-        workspace=_workspace_from_snapshot(_latest_snapshot(db, conversation.id)) if db is not None else None,
+        messages=[stored_message(message) for message in conversation.messages],
+        workspace=None,
     )
 
 
@@ -327,6 +254,8 @@ def _load_prompt_messages(
     db: Session,
     conversation: Conversation,
     workspace: WorkspaceState | None,
+    latest_user: str = "",
+    preferred_symbols: list[str] | None = None,
 ) -> list[ChatMessage]:
     recent_messages = db.scalars(
         select(Message)
@@ -344,24 +273,26 @@ def _load_prompt_messages(
         prompt_messages.pop(0)
     while prompt_messages and prompt_messages[0].role == "assistant":
         prompt_messages.pop(0)
-    workspace_message = _workspace_context_message(workspace)
+    workspace_message = _workspace_context_message(workspace, latest_user, preferred_symbols)
     if workspace_message is not None:
         prompt_messages.insert(0, workspace_message)
     logger.info("Prepared model context conversation_id=%s context_messages=%d", conversation.id, len(prompt_messages))
     return prompt_messages
 
 
-def _finalise_answer(answer: str) -> tuple[str, list[dict]]:
-    files = extract_code_files(answer)
-    if not files:
-        return answer, []
-    cleaned = strip_code_blocks(answer)
-    if cleaned:
-        cleaned = f"{cleaned}\n\n代码已放到右侧代码区。"
-    else:
-        cleaned = "已生成代码，如右侧代码区所示。"
-    return cleaned, files
-
+def _slot_symbols(decision: intent_service.IntentDecision | None) -> list[str]:
+    if decision is None:
+        return []
+    raw = decision.slots.get("search_symbols") or ""
+    symbols = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", raw)
+    function_name = decision.slots.get("function_name") or ""
+    if function_name:
+        symbols.extend(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", function_name))
+    result: list[str] = []
+    for symbol in symbols:
+        if symbol not in result:
+            result.append(symbol)
+    return result
 
 def chat_in_conversation(
     db: Session,
@@ -394,18 +325,32 @@ def chat_in_conversation(
     logger.info("Saved user message conversation_id=%s message_id=%s", conversation.id, user_message.id)
 
     request_workspace = _request_workspace(request)
-    if request_workspace is not None:
-        _save_snapshot(db, conversation.id, request_workspace.files, request_workspace.active_file, "user", user_message.id)
-        db.commit()
-    workspace = request_workspace or _workspace_from_snapshot(_latest_snapshot(db, conversation.id))
-    prompt_messages = _load_prompt_messages(db, conversation, workspace)
+    workspace = request_workspace
 
     active_task = _get_pending_task(db, conversation.id)
     active_task_state = _task_state(active_task)
+    intent_prompt_messages = _load_prompt_messages(db, conversation, None, request.content)
+    decision = intent_service.analyze_intent(intent_prompt_messages, active_task=active_task_state)
+    logger.info(
+        "Precomputed intent decision intent=%s confidence=%.2f missing_slots=%s slots=%s active_task=%s",
+        decision.intent,
+        decision.confidence,
+        decision.missing_slots,
+        intent_service.safe_slots_for_log(decision.slots),
+        bool(active_task),
+    )
+    prompt_messages = _load_prompt_messages(
+        db,
+        conversation,
+        workspace,
+        request.content,
+        preferred_symbols=_slot_symbols(decision),
+    )
     try:
         result = model_router_service.handle_chat(
             prompt_messages,
             active_task=active_task_state,
+            decision=decision,
         )
         answer = result.content
     except RemoteModelError as exc:
@@ -415,30 +360,27 @@ def chat_in_conversation(
         logger.exception("Unexpected chat failure conversation_id=%s", conversation.id)
         raise HTTPException(status_code=500, detail=f"Conversation chat failed: {exc}") from exc
 
-    display_answer, files = _finalise_answer(answer)
+    display_answer = answer
+    patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer)
     conversation.messages.append(assistant_message)
     _sync_task_state(db, conversation.id, active_task, result)
     touch(conversation)
     db.commit()
     db.refresh(assistant_message)
-    snapshot = None
-    if files:
-        snapshot = _save_snapshot(db, conversation.id, files, request.active_file, "assistant", assistant_message.id)
-        db.commit()
     db.refresh(conversation)
     logger.info(
-        "Saved assistant message conversation_id=%s message_id=%s answer_chars=%d files=%d",
+        "Saved assistant message conversation_id=%s message_id=%s answer_chars=%d",
         conversation.id,
         assistant_message.id,
         len(display_answer),
-        len(files),
     )
 
     return ConversationChatResponse(
         conversation=conversation_summary(conversation),
-        message=stored_message(assistant_message, db),
-        workspace=_workspace_from_snapshot(snapshot) or _workspace_from_snapshot(_latest_snapshot(db, conversation.id)),
+        message=stored_message(assistant_message),
+        workspace=workspace,
+        patch=patch,
     )
 
 
@@ -471,11 +413,7 @@ def stream_chat_in_conversation(
     db.refresh(user_message)
 
     request_workspace = _request_workspace(request)
-    if request_workspace is not None:
-        _save_snapshot(db, conversation.id, request_workspace.files, request_workspace.active_file, "user", user_message.id)
-        db.commit()
-    workspace = request_workspace or _workspace_from_snapshot(_latest_snapshot(db, conversation.id))
-    prompt_messages = _load_prompt_messages(db, conversation, workspace)
+    workspace = request_workspace
 
     yield {"type": "conversation", "conversation": conversation_summary(conversation).model_dump(mode="json")}
 
@@ -483,10 +421,28 @@ def stream_chat_in_conversation(
     result: model_router_service.IntentChatResult | None = None
     active_task = _get_pending_task(db, conversation.id)
     active_task_state = _task_state(active_task)
+    intent_prompt_messages = _load_prompt_messages(db, conversation, None, request.content)
+    decision = intent_service.analyze_intent(intent_prompt_messages, active_task=active_task_state)
+    logger.info(
+        "Precomputed intent decision intent=%s confidence=%.2f missing_slots=%s slots=%s active_task=%s",
+        decision.intent,
+        decision.confidence,
+        decision.missing_slots,
+        intent_service.safe_slots_for_log(decision.slots),
+        bool(active_task),
+    )
+    prompt_messages = _load_prompt_messages(
+        db,
+        conversation,
+        workspace,
+        request.content,
+        preferred_symbols=_slot_symbols(decision),
+    )
     try:
         for event in model_router_service.stream_handle_chat(
             prompt_messages,
             active_task=active_task_state,
+            decision=decision,
         ):
             if event.content:
                 chunks.append(event.content)
@@ -503,24 +459,21 @@ def stream_chat_in_conversation(
         return
 
     answer = "".join(chunks).strip()
-    display_answer, files = _finalise_answer(answer)
+    display_answer = answer
     if result is None:
         result = model_router_service.IntentChatResult(content=answer, decision=None, executed=False)
+    patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer)
     conversation.messages.append(assistant_message)
     _sync_task_state(db, conversation.id, active_task, result)
     touch(conversation)
     db.commit()
     db.refresh(assistant_message)
-    snapshot = None
-    if files:
-        snapshot = _save_snapshot(db, conversation.id, files, request.active_file, "assistant", assistant_message.id)
-        db.commit()
     db.refresh(conversation)
-    workspace = _workspace_from_snapshot(snapshot) or _workspace_from_snapshot(_latest_snapshot(db, conversation.id))
     yield {
         "type": "done",
         "conversation": conversation_summary(conversation).model_dump(mode="json"),
-        "message": stored_message(assistant_message, db).model_dump(mode="json"),
+        "message": stored_message(assistant_message).model_dump(mode="json"),
         "workspace": workspace.model_dump(mode="json") if workspace is not None else None,
+        "patch": patch.model_dump(mode="json") if patch is not None else None,
     }

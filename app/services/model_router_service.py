@@ -39,15 +39,16 @@ def chat(
 def handle_chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
+    decision: IntentDecision | None = None,
 ) -> IntentChatResult:
     if not _intent_routing_available():
         logger.info("Intent routing unavailable or disabled; using coder model directly")
         content = coder_chat_model.chat(messages, cfg=CODER_CONFIG)
         return IntentChatResult(content=content, decision=None, executed=True)
 
-    decision = _decide_intent(messages, active_task)
+    decision = decision or _decide_intent(messages, active_task)
 
-    if decision.intent == "write_code":
+    if intent_service.is_code_intent(decision.intent):
         if decision.missing_slots:
             content = decision.follow_up_question or intent_service.default_follow_up(
                 decision.intent,
@@ -77,6 +78,7 @@ def handle_chat(
 def stream_handle_chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
+    decision: IntentDecision | None = None,
 ) -> Iterator[IntentStreamEvent]:
     if not _intent_routing_available():
         logger.info("Intent routing unavailable or disabled; streaming coder model directly")
@@ -90,9 +92,9 @@ def stream_handle_chat(
         yield IntentStreamEvent(result=IntentChatResult(content=content, decision=None, executed=True))
         return
 
-    decision = _decide_intent(messages, active_task)
+    decision = decision or _decide_intent(messages, active_task)
 
-    if decision.intent == "write_code":
+    if intent_service.is_code_intent(decision.intent):
         if decision.missing_slots:
             content = decision.follow_up_question or intent_service.default_follow_up(
                 decision.intent,

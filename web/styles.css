@@ -38,6 +38,8 @@ body {
 }
 
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -258,6 +260,8 @@ h1 {
   background: var(--accent-strong);
 }
 
+input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -268,13 +272,15 @@ textarea {
   padding: 12px;
 }
 
+input:focus,
+select:focus,
 textarea:focus {
   border-color: var(--accent);
 }
 
 .code-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 10px;
   border-right: 0;
   padding: 16px;
@@ -307,6 +313,35 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.workspace-controls {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.workspace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.workspace-row input,
+.workspace-row select {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.workspace-controls p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-tabs {
@@ -473,12 +508,53 @@ textarea:focus {
   font: 0.92em/1.4 Consolas, "SFMono-Regular", monospace;
 }
 
+.code-block-shell {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f6f8fa;
+  margin: 0 0 12px;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  background: #eef2f6;
+  padding: 6px 8px;
+}
+
+.code-block-language {
+  color: var(--muted);
+  font: 12px/1.2 Consolas, "SFMono-Regular", monospace;
+  text-transform: lowercase;
+}
+
+.code-block-copy {
+  min-height: 26px;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .markdown-body pre {
   max-width: 100%;
   overflow: auto;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+}
+
+.markdown-body pre code {
+  display: block;
+  overflow-x: auto;
   border-radius: 8px;
-  background: #ffffff;
+  background: transparent;
   padding: 12px;
+  font: 0.92em/1.55 Consolas, "SFMono-Regular", monospace;
 }
 
 .markdown-body blockquote {
@@ -571,4 +647,123 @@ textarea:focus {
     background: #0c1116;
   }
 }
+/* workspace toolbar override */
+.workspace-controls .workspace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 
+.workspace-controls .workspace-toolbar select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.workspace-controls .workspace-toolbar button,
+.workspace-controls .folder-button {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+}
+/* closable file tabs and output panel */
+.file-tabs .file-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.file-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-tab-close:hover {
+  background: rgba(127, 127, 127, 0.18);
+  color: var(--danger);
+}
+
+.run-output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-output-header button {
+  min-height: 26px;
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.run-output-header button:hover:not(:disabled) {
+  color: var(--danger);
+}
+/* patch proposal panel */
+.patch-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.patch-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.patch-panel-header button {
+  min-height: 26px;
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.patch-panel p {
+  margin: 0;
+  padding: 10px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.patch-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.patch-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  font-size: 12px;
+}

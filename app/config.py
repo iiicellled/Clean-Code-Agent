@@ -55,5 +55,7 @@ class Settings:
     code_runner_docker_cpus: str = os.getenv("CODE_RUNNER_DOCKER_CPUS", "1")
     code_runner_docker_pids_limit: int = int(os.getenv("CODE_RUNNER_DOCKER_PIDS_LIMIT", "64"))
 
+    workspace_root: str = os.getenv("WORKSPACE_ROOT", "").strip()
+
 
 settings = Settings()

@@ -33,11 +33,6 @@ class Conversation(Base):
         cascade="all, delete-orphan",
         order_by="ConversationTask.id",
     )
-    code_snapshots: Mapped[list["CodeSnapshot"]] = relationship(
-        back_populates="conversation",
-        cascade="all, delete-orphan",
-        order_by="CodeSnapshot.id",
-    )
 
 
 class Message(Base):
@@ -79,22 +74,3 @@ class ConversationTask(Base):
 
     conversation: Mapped[Conversation] = relationship(back_populates="tasks")
 
-
-class CodeSnapshot(Base):
-    __tablename__ = "code_snapshots"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(
-        ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False
-    )
-    message_id: Mapped[int | None] = mapped_column(
-        ForeignKey("messages.id", ondelete="SET NULL"), index=True, nullable=True
-    )
-    files_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    active_file: Mapped[str | None] = mapped_column(String(260), nullable=True)
-    created_by: Mapped[str] = mapped_column(String(20), nullable=False, default="assistant")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    conversation: Mapped[Conversation] = relationship(back_populates="code_snapshots")

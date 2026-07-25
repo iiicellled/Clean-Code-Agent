@@ -54,7 +54,15 @@ def _build_review_messages(
         latest_user=latest_user,
         raw_code=raw_code.strip(),
     )
-    return [
+    review_messages = [
         ChatMessage(role="system", content=config.system_prompt),
         ChatMessage(role="user", content=user_prompt),
     ]
+    logger.info(
+        "Code review prompt intent=%s slots=%s system_prompt=%r user_prompt=%r",
+        decision.intent,
+        decision.slots,
+        review_messages[0].content,
+        review_messages[1].content,
+    )
+    return review_messages

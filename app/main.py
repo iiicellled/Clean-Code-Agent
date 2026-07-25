@@ -11,11 +11,8 @@ from sqlalchemy.orm import Session
 
 from .config import PROJECT_DIR, settings
 from .database import get_db, init_db
-from .model_service import RemoteModelError, chat_model, coder_chat_model, primary_chat_model
+from .model_service import chat_model, coder_chat_model, primary_chat_model
 from .schemas import (
-    ChatMessage,
-    ChatRequest,
-    ChatResponse,
     CodeRunRequest,
     CodeRunResponse,
     ConversationChatRequest,
@@ -25,7 +22,7 @@ from .schemas import (
     ConversationSummary,
     ModelStatus,
 )
-from .services import code_runner_service, conversation_service, model_router_service
+from .services import code_runner_service, conversation_service
 
 
 logging.basicConfig(level=logging.INFO)
@@ -67,7 +64,7 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, str | bool]:
-    return {"status": "ok", "database_configured": settings.database_url is not None}
+    return {"status": "ok", "database_required": True, "database_configured": settings.database_url is not None}
 
 
 @app.get("/api/model/status", response_model=ModelStatus)
@@ -159,32 +156,5 @@ def run_code(request: CodeRunRequest) -> CodeRunResponse:
     return code_runner_service.run_python_code(request)
 
 
-@app.post("/api/chat/stream")
-def chat_stream(request: ChatRequest) -> StreamingResponse:
-    def event_stream():
-        try:
-            for chunk in model_router_service.stream_chat(request.messages):
-                yield sse_json({"type": "delta", "content": chunk})
-            yield sse_json({"type": "done"})
-        except RemoteModelError as exc:
-            yield sse_json({"type": "error", "detail": str(exc)})
-        except Exception as exc:
-            logger.exception("Unhandled streaming chat error")
-            yield sse_json({"type": "error", "detail": f"Streaming chat failed: {exc}"})
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
-@app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    try:
-        answer = model_router_service.chat(
-            request.messages,
-        )
-    except RemoteModelError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    return ChatResponse(message=ChatMessage(role="assistant", content=answer))

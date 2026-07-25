@@ -27,7 +27,7 @@ INTENT_CONFIG = ServiceModelConfig(
 CHATBOT_CONFIG = ServiceModelConfig(
     temperature=0.7,
     top_p=0.9,
-    max_new_tokens=2048,
+    max_new_tokens=4096,
     system_prompt=(
         "你是一个乐于助人的代码编程专家。请语气自然、条理清晰地回答用户的问题。"
     ),

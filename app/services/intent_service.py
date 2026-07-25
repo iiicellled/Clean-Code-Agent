@@ -14,11 +14,14 @@ from .service_configs import INTENT_CONFIG
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-IntentName = Literal["general_chat", "write_code", "unknown"]
+IntentName = Literal["general_chat", "write_code", "create_function", "modify_function", "unknown"]
+CODE_INTENTS = {"write_code", "create_function", "modify_function"}
 INTENT_CONTEXT_LIMIT = 12
 INTENT_PARSE_RETRIES = 2
 FOLLOW_UP_LANGUAGE = "你想用什么编程语言？"
 FOLLOW_UP_TASK = "具体要实现什么算法、函数或功能？"
+FOLLOW_UP_FUNCTION_NAME = "请提供函数名。"
+FOLLOW_UP_PARAMETERS = "请提供函数参数。"
 FOLLOW_UP_DEFAULT = "请补充一下具体需求。"
 
 
@@ -56,7 +59,7 @@ class IntentDecision:
 
     @property
     def ready_to_execute(self) -> bool:
-        return self.intent == "write_code" and not self.missing_slots
+        return self.intent in CODE_INTENTS and not self.missing_slots
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ INTENT_SCHEMAS: dict[str, IntentSchema] = {
     ),
     "write_code": IntentSchema(
         name="write_code",
-        description="用户想要生成代码、实现算法、编写函数、脚本或补全程序。",
+        description="用户想要生成一段独立代码、脚本、类、算法，或无法明确归入新增/修改单个函数的代码任务。",
         slots=(
             SlotSchema(
                 name="language",
@@ -106,6 +109,113 @@ INTENT_SCHEMAS: dict[str, IntentSchema] = {
                 description="可选约束，例如注释要求、复杂度、输入输出格式或禁用的库。",
                 required=False,
             ),
+            SlotSchema(
+                name="search_symbols",
+                description="需要在当前打开文件中检索完整定义块的类名或函数名，多个名称用英文逗号分隔。例如 Customer, check_customer。",
+                required=False,
+            ),
+        ),
+    ),
+    "create_function": IntentSchema(
+        name="create_function",
+        description="用户想在当前文件或项目中新增一个函数；目标函数通常尚不存在。",
+        slots=(
+            SlotSchema(
+                name="language",
+                description="编程语言；如果当前上下文明确显示活动文件语言，可从上下文推断。",
+                required=False,
+                follow_up_question=FOLLOW_UP_LANGUAGE,
+            ),
+            SlotSchema(
+                name="function_name",
+                description="要新增的函数名。",
+                required=True,
+                follow_up_question=FOLLOW_UP_FUNCTION_NAME,
+            ),
+            SlotSchema(
+                name="parameters",
+                description="函数参数列表，例如 records, weights；如果用户明确说无参数，也可填 no parameters。",
+                required=True,
+                follow_up_question=FOLLOW_UP_PARAMETERS,
+            ),
+            SlotSchema(
+                name="task",
+                description="函数需要实现的具体功能，必须具体到足以生成函数体。",
+                required=True,
+                follow_up_question=FOLLOW_UP_TASK,
+                invalid_values={
+                    "code",
+                    "program",
+                    "function",
+                    "script",
+                    "algorithm",
+                    "代码",
+                    "程序",
+                    "函数",
+                    "脚本",
+                    "算法",
+                    "一个函数",
+                    "新增函数",
+                },
+            ),
+            SlotSchema(
+                name="constraints",
+                description="可选约束，例如返回值格式、复杂度、异常处理、是否允许第三方库。",
+                required=False,
+            ),
+            SlotSchema(
+                name="search_symbols",
+                description="需要在当前打开文件中检索完整定义块的类名或函数名，多个名称用英文逗号分隔。例如 Customer, check_customer。",
+                required=False,
+            ),
+        ),
+    ),
+    "modify_function": IntentSchema(
+        name="modify_function",
+        description="用户想补全、修复、重构或改写当前文件中的某个已有函数。",
+        slots=(
+            SlotSchema(
+                name="language",
+                description="编程语言；如果当前上下文明确显示活动文件语言，可从上下文推断。",
+                required=False,
+                follow_up_question=FOLLOW_UP_LANGUAGE,
+            ),
+            SlotSchema(
+                name="function_name",
+                description="要修改、补全或修复的函数名。",
+                required=True,
+                follow_up_question=FOLLOW_UP_FUNCTION_NAME,
+            ),
+            SlotSchema(
+                name="task",
+                description="需要如何修改该函数；必须具体到足以生成替换实现。",
+                required=True,
+                follow_up_question=FOLLOW_UP_TASK,
+                invalid_values={
+                    "code",
+                    "program",
+                    "function",
+                    "script",
+                    "algorithm",
+                    "代码",
+                    "程序",
+                    "函数",
+                    "脚本",
+                    "算法",
+                    "修改函数",
+                    "补全函数",
+                },
+            ),
+            SlotSchema(
+                name="constraints",
+                description="可选约束，例如保持签名不变、兼容调用点、异常处理或性能要求。",
+                required=False,
+            ),
+            SlotSchema(
+                name="search_symbols",
+                description="需要在当前打开文件中检索完整定义块的类名或函数名，多个名称用英文逗号分隔。例如 Customer, check_customer。",
+                required=False,
+            ),
         ),
     ),
     "unknown": IntentSchema(
@@ -136,7 +246,7 @@ def build_intent_system_prompt() -> str:
         + "\n\n必须返回以下 JSON 结构：\n"
         + json.dumps(
             {
-                "intent": "general_chat | write_code | unknown",
+                "intent": "general_chat | write_code | create_function | modify_function | unknown",
                 "confidence": 0.0,
                 "slots": output_slots,
                 "missing_slots": [],
@@ -190,6 +300,9 @@ def analyze_intent(
     logger.error("Intent parsing failed after retries; falling back to general_chat. raw=%s", raw[:800])
     return fallback_general_chat_decision()
 
+
+def is_code_intent(intent: str | None) -> bool:
+    return intent in CODE_INTENTS
 
 def fallback_general_chat_decision() -> IntentDecision:
     return IntentDecision(
