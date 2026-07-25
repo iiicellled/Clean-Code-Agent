@@ -5,7 +5,19 @@ import logging
 from ..model_service import coder_chat_model
 from ..schemas import ChatMessage
 from .intent_service import IntentDecision
-from .service_configs import ServiceModelConfig, CODER_CONFIG, CODER_USER_PROMPT_TEMPLATE
+from .service_configs import (
+    CODER_CONFIG,
+    CODER_CREATE_FUNCTION_RULE,
+    CODER_MODIFY_FUNCTION_RULE,
+    CODER_PATCH_OUTPUT_RULE,
+    CODER_PLANNER_CONTEXT_PROMPT,
+    CODER_PLANNER_FOLLOW_RULE,
+    CODER_USER_PROMPT_TEMPLATE,
+    CODER_WORKSPACE_CONTEXT_PROMPT,
+    PLANNER_CONTEXT_PREFIX,
+    ServiceModelConfig,
+    WORKSPACE_CONTEXT_PREFIX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +47,11 @@ def _build_coder_messages(
     latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
     workspace_context = next((
         message.content for message in messages
-        if message.role == "system" and message.content.startswith("Current editable code workspace")
+        if message.role == "system" and message.content.startswith(WORKSPACE_CONTEXT_PREFIX)
+    ), "")
+    planner_context = next((
+        message.content for message in messages
+        if message.role == "system" and message.content.startswith(PLANNER_CONTEXT_PREFIX)
     ), "")
     prompt = CODER_USER_PROMPT_TEMPLATE.format(
         language=slots.get("language"),
@@ -50,12 +66,15 @@ def _build_coder_messages(
     if parameters:
         prompt += f"\n函数参数：{parameters}"
     if decision.intent == "create_function":
-        prompt += "\n\nFunction output rule: Return only the complete new target function. Include its full signature and body. Do not return imports, tests, examples, explanations, or the whole file."
+        prompt += "\n\n" + CODER_CREATE_FUNCTION_RULE
     elif decision.intent == "modify_function":
-        prompt += "\n\nFunction output rule: Return only the complete replacement implementation of the target function. Keep the target function name unchanged and preserve call compatibility unless the user explicitly asks to change the signature. Do not return imports, tests, examples, explanations, or the whole file."
-    if workspace_context:
-        prompt += "\n\nRelevant current-file context:\n" + workspace_context[:5000]
-        prompt += "\n\nPatch output rule: When editing the current file, return only the complete function or class that should replace the old one. Do not return the whole file unless the user explicitly asks for a full-file rewrite."
+        prompt += "\n\n" + CODER_MODIFY_FUNCTION_RULE
+    if planner_context:
+        prompt += "\n\n" + CODER_PLANNER_CONTEXT_PROMPT + "\n" + planner_context[:3000]
+        prompt += "\n\n" + CODER_PLANNER_FOLLOW_RULE
+    if workspace_context and not planner_context:
+        prompt += "\n\n" + CODER_WORKSPACE_CONTEXT_PROMPT + "\n" + workspace_context[:5000]
+        prompt += "\n\n" + CODER_PATCH_OUTPUT_RULE
     return [
         ChatMessage(role="system", content=config.system_prompt),
         ChatMessage(role="user", content=prompt),

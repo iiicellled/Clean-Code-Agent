@@ -1,5 +1,7 @@
 import re
 
+
+
 def quicksort(customers: list) -> list:
     # 处理输入为 None 或空列表的边界情况
     if not customers:
@@ -19,23 +21,6 @@ def quicksort(customers: list) -> list:
     
     # 递归排序左右子列表并拼接结果
     return quicksort(left) + middle + quicksort(right)
-
-def check_customer(customer):
-    """
-    检查 Customer 实例的所有成员变量是否合法。
-    只有当所有成员变量都通过类内部的检测函数时，才返回 True。
-    """
-    if customer is None:
-        return False
-
-    # 使用 and 逻辑运算实现短路求值，遇到第一个不合法的属性即停止后续检测
-    return (
-        Customer.check_id(customer.id) and
-        Customer.check_name(customer.name) and
-        Customer.check_age(customer.age) and
-        Customer.check_phone(customer.phone) and
-        Customer.check_email(customer.email)
-    )
 
 class Customer:
 	def __init__(self, c_id, name, age='None', phone='None', email='None'):

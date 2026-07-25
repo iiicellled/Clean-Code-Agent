@@ -6,7 +6,11 @@ import logging
 from ..model_service import primary_chat_model
 from ..schemas import ChatMessage
 from .intent_service import IntentDecision
-from .service_configs import ServiceModelConfig, CODE_REVIEW_CONFIG, CODE_REVIEW_USER_PROMPT_TEMPLATE
+from .service_configs import (
+    CODE_REVIEW_CONFIG,
+    CODE_REVIEW_USER_PROMPT_TEMPLATE,
+    ServiceModelConfig,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +51,10 @@ def _build_review_messages(
 ) -> list[ChatMessage]:
     slots = decision.slots
     latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
+    planner_context = next((
+        message.content for message in messages
+        if message.role == "system" and message.content.startswith("给 coder 的实现计划")
+    ), "")
     user_prompt = CODE_REVIEW_USER_PROMPT_TEMPLATE.format(
         language=slots.get("language"),
         task=slots.get("task"),
@@ -54,6 +62,8 @@ def _build_review_messages(
         latest_user=latest_user,
         raw_code=raw_code.strip(),
     )
+    if planner_context:
+        user_prompt += "\n\n主模型实现计划：\n" + planner_context[:3000]
     review_messages = [
         ChatMessage(role="system", content=config.system_prompt),
         ChatMessage(role="user", content=user_prompt),

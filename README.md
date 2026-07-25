@@ -50,12 +50,13 @@ flowchart TD
     E -->|general_chat| F[chatbot_service 调用主模型回答]
     E -->|code intent 且缺少槽位| G[返回追问]
     E -->|code intent 且槽位完整| H[current_file_search_tool 搜索当前活动文件]
-    H --> I[coder_service 构造 coder prompt]
-    I --> J[coder_chat_model 调用 Clean-Code-Qwen]
-    J --> K[code_review_service 调用主模型审阅和整理]
-    K --> L[patch_service 生成函数级 patch 提议]
-    L --> M[conversation_service 保存助手消息并返回 patch]
-    M --> N[Web 代码区一键应用 / 保存本地文件]
+    H --> I[planner_service 根据上下文生成实现计划]
+    I --> J[coder_service 基于计划构造 coder prompt]
+    J --> K[coder_chat_model 调用 Clean-Code-Qwen]
+    K --> L[code_review_service 调用主模型审阅和整理]
+    L --> M[patch_service 生成函数级 patch 提议]
+    M --> N[conversation_service 保存助手消息并返回 patch]
+    N --> O[Web 代码区一键应用 / 保存本地文件]
 ```
 
 对应的核心代码位置：
@@ -63,7 +64,8 @@ flowchart TD
 - `app/services/model_router_service.py`：决定走普通聊天、追问、代码生成还是代码审阅链路
 - `app/services/intent_service.py`：构造意图识别 prompt，要求主模型返回严格 JSON
 - `app/tools/current_file_search_tool.py`：在当前活动文件中搜索目标函数、类、调用点或关键词片段
-- `app/services/coder_service.py`：将结构化任务和当前文件上下文转成 coder 模型输入
+- `app/services/planner_service.py`：根据用户请求、意图槽位和当前文件检索结果生成给 coder 的实现计划
+- `app/services/coder_service.py`：将结构化任务和 planner 计划转成 coder 模型输入
 - `app/services/code_review_service.py`：将 coder 生成的 raw code 交给主模型复核和整理
 - `app/services/patch_service.py`：把审阅后的代码整理成可一键应用的函数级 patch
 - `app/services/conversation_service.py`：负责消息、上下文、任务状态和 patch 返回
@@ -135,20 +137,35 @@ unknown
 
 这样可以避免把整个大文件都塞进模型上下文，同时让 coder 模型更稳定地生成局部修改。
 
-### 5. 主模型如何告知 coder 模型
+### 5. Planner 如何把代码上下文转成实现计划
+
+早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本新增了 `planner_service`：主模型会先阅读用户请求、意图槽位和当前文件检索结果，提炼出更明确的实现计划，再把计划传给 coder 模型。
+
+Planner 不负责写完整代码，而是输出给 coder 使用的短计划，通常包括：
+
+- 要新增或修改的目标函数
+- 需要参考的类、函数、字段或调用方式
+- 需要保持的函数签名、返回值含义和调用兼容性
+- 关键边界条件和异常情况
+- coder 应避免的错误，例如不要重写整个类、不要遗漏辅助逻辑
+
+这一步把“原始代码片段上下文”压缩成“实现约束和修改步骤”，让 coder 模型更聚焦。若 planner 调用失败，后端会继续执行；`coder_service` 会在没有 planner 计划时退回使用当前文件检索结果作为上下文。
+
+### 6. 主模型如何告知 coder 模型
 
 主模型和 coder 模型之间通过后端的结构化中间层衔接：
 
 1. `intent_service` 调用主模型，得到 `IntentDecision`。
 2. `conversation_service` 根据 `function_name`、`search_symbols` 和用户请求搜索当前活动文件。
-3. `model_router_service` 判断 `IntentDecision.ready_to_execute`。
-4. `coder_service` 读取 `language`、`task`、`constraints`、`function_name`、`parameters`、当前文件搜索结果和最新用户消息。
-5. 后端用 `CODER_USER_PROMPT_TEMPLATE` 重新组织成面向 coder 模型的 prompt。
-6. `coder_chat_model` 通过 OpenAI-compatible HTTP 请求调用远程 Clean-Code-Qwen。
+3. `planner_service` 根据当前文件检索结果生成给 coder 的实现计划。
+4. `model_router_service` 判断 `IntentDecision.ready_to_execute`。
+5. `coder_service` 读取 `language`、`task`、`constraints`、`function_name`、`parameters`、planner 计划和最新用户消息。
+6. 后端用 `CODER_USER_PROMPT_TEMPLATE` 重新组织成面向 coder 模型的 prompt。
+7. `coder_chat_model` 通过 OpenAI-compatible HTTP 请求调用远程 Clean-Code-Qwen。
 
 对于 `create_function`，coder 模型被要求只返回完整的新目标函数。对于 `modify_function`，coder 模型被要求只返回目标函数的完整替换实现，并尽量保持函数名和调用兼容。
 
-### 6. 主模型审阅与 patch 提议
+### 7. 主模型审阅与 patch 提议
 
 当 coder 模型生成初稿后，系统会进入审阅阶段：
 
@@ -167,7 +184,7 @@ unknown
 
 Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览器才会通过本地文件句柄覆写磁盘文件。
 
-### 7. 会话记忆与数据库
+### 8. 会话记忆与数据库
 
 本版本必须配置 `DATABASE_URL`。没有数据库时，后端启动会失败，前端也不会退回无历史模式。
 
@@ -192,7 +209,7 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 选择项目文件夹 -> 打开文件 -> 让模型修改函数 -> 应用 patch -> 保存文件 -> 运行验证 -> 继续优化
 ```
 
-### 8. MySQL 数据表
+### 9. MySQL 数据表
 
 配置 `DATABASE_URL` 后，SQLAlchemy 会自动创建 3 张表：
 
@@ -238,7 +255,7 @@ erDiagram
 DROP TABLE code_snapshots;
 ```
 
-### 9. Python 代码运行
+### 10. Python 代码运行
 
 后端提供 `/api/code/run` 接口运行 Python 代码。默认执行后端为 Docker：后端会把用户代码写入一次性临时目录，再使用 `docker run --rm` 启动隔离容器运行脚本。
 
@@ -254,7 +271,7 @@ DROP TABLE code_snapshots;
 
 该能力用于基本验证生成代码的行为，不建议执行不可信或高风险代码。如果本机暂时没有 Docker，开发调试时可以通过 `.env` 切回本地 Python runner。
 
-### 10. Web 页面展示
+### 11. Web 页面展示
 
 前端主要用于展示和调试后端 agent 能力，包含：
 
@@ -291,6 +308,7 @@ Local / Application Server
     - coder model client
     - intent routing
     - current-file search
+    - implementation planning
     - code generation
     - code review
     - function-level patch proposal
@@ -316,7 +334,8 @@ coder_agent/
     model_service.py                # 主模型和 coder 模型客户端
     services/
       chatbot_service.py            # 普通聊天服务，由主模型处理
-      coder_service.py              # 将结构化任务转给 coder 模型
+      planner_service.py            # 根据当前文件上下文生成实现计划
+      coder_service.py              # 将结构化任务和 planner 计划转给 coder 模型
       code_review_service.py        # 主模型审阅和整理 coder 输出
       code_runner_service.py        # Python 代码运行
       conversation_service.py       # 会话、上下文、任务状态、当前工作区和 patch 编排
@@ -600,25 +619,16 @@ vLLM 服务 -> Clean Code Agent 后端 -> Web 页面/API
 
 ## 当前限制
 
-- 必须配置 MySQL `DATABASE_URL`，不支持无数据库模式。
 - 本地项目读取依赖浏览器 File System Access API，建议使用 Chrome 或 Edge。
 - 后端当前只搜索前端选中的当前活动文件，不做全项目索引或跨文件自动搜索。
 - Patch 主要支持 Python 函数级新增和替换；类内部方法、多文件联动、跨语言 patch 还不是完整能力。
 - 内置代码运行目前只支持 Python。
-<<<<<<< HEAD
-=======
-- 会话历史依赖外部数据库，不配置 `DATABASE_URL` 时不会保存历史。
->>>>>>> a385e6ed4f0ef7d50f024971e6b932eecfd2fd17
 - `serve_remote.py` 当前可以接受 `stream: true`，但具体是否逐 token 输出取决于远程服务实现。
 
 ## 后续计划
 
 - 增加多文件项目级代码搜索与修改能力
 - 增加测试生成与自动运行
-<<<<<<< HEAD
 - 增加 patch diff 展示和冲突解释
 - 增加更多语言的运行支持
-=======
 - 增加 Git diff 展示和补丁应用
-- 增加更多语言的运行支持
->>>>>>> a385e6ed4f0ef7d50f024971e6b932eecfd2fd17

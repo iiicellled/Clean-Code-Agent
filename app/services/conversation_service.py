@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import UTC, datetime
 import logging
@@ -22,7 +22,8 @@ from ..schemas import (
     StoredMessage,
     WorkspaceState,
 )
-from . import intent_service, model_router_service, patch_service
+from . import intent_service, model_router_service, patch_service, planner_service
+from .service_configs import WORKSPACE_CONTEXT_PROMPT
 from ..tools import current_file_search_tool
 
 
@@ -178,12 +179,7 @@ def _workspace_context_message(
         preferred_symbols=preferred_symbols,
     )
     tool_text = current_file_search_tool.format_tool_result(search_result)
-    content = (
-        "Current editable code workspace. Treat the tool result below as the source of truth for code changes. "
-        "The tool only searched the current active file. If you propose changes, prefer replacing one complete function or inserting a focused function block."
-        "\n\n"
-        + tool_text
-    )
+    content = WORKSPACE_CONTEXT_PROMPT + "\n\n" + tool_text
     return ChatMessage(role="system", content=content)
 
 
@@ -280,6 +276,19 @@ def _load_prompt_messages(
     return prompt_messages
 
 
+def _append_planner_message(
+    prompt_messages: list[ChatMessage],
+    decision: intent_service.IntentDecision,
+) -> list[ChatMessage]:
+    if not intent_service.is_code_intent(decision.intent) or decision.missing_slots:
+        return prompt_messages
+    try:
+        planner_message = planner_service.build_planner_message(decision, prompt_messages)
+    except RemoteModelError:
+        logger.warning("Planner model failed; continuing without implementation plan")
+        return prompt_messages
+    return [*prompt_messages, planner_message]
+
 def _slot_symbols(decision: intent_service.IntentDecision | None) -> list[str]:
     if decision is None:
         return []
@@ -346,6 +355,7 @@ def chat_in_conversation(
         request.content,
         preferred_symbols=_slot_symbols(decision),
     )
+    prompt_messages = _append_planner_message(prompt_messages, decision)
     try:
         result = model_router_service.handle_chat(
             prompt_messages,
@@ -438,6 +448,7 @@ def stream_chat_in_conversation(
         request.content,
         preferred_symbols=_slot_symbols(decision),
     )
+    prompt_messages = _append_planner_message(prompt_messages, decision)
     try:
         for event in model_router_service.stream_handle_chat(
             prompt_messages,
