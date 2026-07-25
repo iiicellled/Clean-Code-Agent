@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
@@ -53,6 +53,7 @@ class ConversationCreate(BaseModel):
 class StoredMessage(ChatMessage):
     id: int
     created_at: datetime
+    active_file: str | None = None
 
 
 class ConversationSummary(BaseModel):

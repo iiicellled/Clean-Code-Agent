@@ -2,6 +2,24 @@ import re
 
 
 
+
+def check_customer(customer):
+    """
+    检查 Customer 实例的所有成员变量是否均通过类内部的合法性检测。
+    """
+    # 确保传入的是 Customer 实例，防止空值或错误类型引发 AttributeError
+    if not isinstance(customer, Customer):
+        return False
+
+    # 使用 and 运算符实现短路求值，遇到不合法的属性立即返回 False，避免不必要的计算
+    return (
+        Customer.check_id(customer.id) and
+        Customer.check_name(customer.name) and
+        Customer.check_age(customer.age) and
+        Customer.check_phone(customer.phone) and
+        Customer.check_email(customer.email)
+    )
+
 def quicksort(customers: list) -> list:
     # 处理输入为 None 或空列表的边界情况
     if not customers:

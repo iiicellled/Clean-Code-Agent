@@ -52,16 +52,14 @@ LANG_EXTENSIONS = {
 }
 
 
-def _get_pending_task(db: Session, conversation_id: int) -> ConversationTask | None:
-    return db.scalar(
-        select(ConversationTask)
-        .where(
-            ConversationTask.conversation_id == conversation_id,
-            ConversationTask.status == TASK_STATUS_PENDING,
-        )
-        .order_by(ConversationTask.id.desc())
-        .limit(1)
+def _get_pending_task(db: Session, conversation_id: int, active_file: str | None = None) -> ConversationTask | None:
+    query = select(ConversationTask).where(
+        ConversationTask.conversation_id == conversation_id,
+        ConversationTask.status == TASK_STATUS_PENDING,
     )
+    if active_file:
+        query = query.where(ConversationTask.active_file == active_file)
+    return db.scalar(query.order_by(ConversationTask.id.desc()).limit(1))
 
 
 def _task_state(task: ConversationTask | None) -> intent_service.ActiveTaskState | None:
@@ -77,6 +75,7 @@ def _task_state(task: ConversationTask | None) -> intent_service.ActiveTaskState
 def _sync_task_state(
     db: Session,
     conversation_id: int,
+    active_file: str | None,
     active_task: ConversationTask | None,
     result: model_router_service.IntentChatResult,
 ) -> None:
@@ -93,15 +92,17 @@ def _sync_task_state(
 
     task = active_task or ConversationTask(conversation_id=conversation_id, intent=decision.intent)
     task.intent = decision.intent
+    task.active_file = active_file
     task.status = status
     task.slots_json = decision.slots
     task.missing_slots_json = decision.missing_slots
     touch(task)
     db.add(task)
     logger.info(
-        "Synced conversation task conversation_id=%s task_id=%s intent=%s status=%s missing_slots=%s",
+        "Synced conversation task conversation_id=%s task_id=%s active_file=%s intent=%s status=%s missing_slots=%s",
         conversation_id,
         task.id,
+        task.active_file,
         task.intent,
         task.status,
         task.missing_slots_json,
@@ -123,6 +124,7 @@ def stored_message(message: Message) -> StoredMessage:
         role=message.role,  # type: ignore[arg-type]
         content=message.content,
         created_at=message.created_at,
+        active_file=message.active_file,
     )
 
 
@@ -165,6 +167,14 @@ def _request_workspace(request: ConversationChatRequest) -> WorkspaceState | Non
     return WorkspaceState(files=[CodeFile(**file) for file in files], active_file=active_file)
 
 
+
+def _active_file_for_request(request: ConversationChatRequest, workspace: WorkspaceState | None = None) -> str | None:
+    if request.active_file:
+        return request.active_file
+    if workspace is not None and workspace.active_file:
+        return workspace.active_file
+    files = _normalise_files(request.current_files)
+    return files[0]["path"] if files else None
 
 def _workspace_context_message(
     workspace: WorkspaceState | None,
@@ -246,18 +256,22 @@ def delete_conversation(db: Session, conversation_id: int) -> None:
     logger.info("Deleted conversation id=%s", conversation_id)
 
 
+def _latest_user_intent_messages(content: str) -> list[ChatMessage]:
+    return [ChatMessage(role="user", content=content)]
+
 def _load_prompt_messages(
     db: Session,
     conversation: Conversation,
     workspace: WorkspaceState | None,
     latest_user: str = "",
     preferred_symbols: list[str] | None = None,
+    active_file: str | None = None,
 ) -> list[ChatMessage]:
+    query = select(Message).where(Message.conversation_id == conversation.id)
+    if active_file:
+        query = query.where(Message.active_file == active_file)
     recent_messages = db.scalars(
-        select(Message)
-        .where(Message.conversation_id == conversation.id)
-        .order_by(Message.id.desc())
-        .limit(CONTEXT_MESSAGE_LIMIT + 1)
+        query.order_by(Message.id.desc()).limit(CONTEXT_MESSAGE_LIMIT + 1)
     ).all()
     history_messages = list(reversed(recent_messages))
     prompt_messages = [
@@ -324,7 +338,8 @@ def chat_in_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     had_messages = bool(conversation.messages)
-    user_message = Message(conversation_id=conversation.id, role="user", content=request.content)
+    active_file = _active_file_for_request(request)
+    user_message = Message(conversation_id=conversation.id, role="user", content=request.content, active_file=active_file)
     conversation.messages.append(user_message)
     if not had_messages and conversation.title == "New conversation":
         conversation.title = title_from_content(request.content)
@@ -335,10 +350,11 @@ def chat_in_conversation(
 
     request_workspace = _request_workspace(request)
     workspace = request_workspace
+    active_file = _active_file_for_request(request, workspace)
 
-    active_task = _get_pending_task(db, conversation.id)
+    active_task = _get_pending_task(db, conversation.id, active_file)
     active_task_state = _task_state(active_task)
-    intent_prompt_messages = _load_prompt_messages(db, conversation, None, request.content)
+    intent_prompt_messages = _latest_user_intent_messages(request.content)
     decision = intent_service.analyze_intent(intent_prompt_messages, active_task=active_task_state)
     logger.info(
         "Precomputed intent decision intent=%s confidence=%.2f missing_slots=%s slots=%s active_task=%s",
@@ -354,6 +370,7 @@ def chat_in_conversation(
         workspace,
         request.content,
         preferred_symbols=_slot_symbols(decision),
+        active_file=active_file,
     )
     prompt_messages = _append_planner_message(prompt_messages, decision)
     try:
@@ -372,9 +389,9 @@ def chat_in_conversation(
 
     display_answer = answer
     patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
-    assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer)
+    assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer, active_file=active_file)
     conversation.messages.append(assistant_message)
-    _sync_task_state(db, conversation.id, active_task, result)
+    _sync_task_state(db, conversation.id, active_file, active_task, result)
     touch(conversation)
     db.commit()
     db.refresh(assistant_message)
@@ -414,7 +431,8 @@ def stream_chat_in_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     had_messages = bool(conversation.messages)
-    user_message = Message(conversation_id=conversation.id, role="user", content=request.content)
+    active_file = _active_file_for_request(request)
+    user_message = Message(conversation_id=conversation.id, role="user", content=request.content, active_file=active_file)
     conversation.messages.append(user_message)
     if not had_messages and conversation.title == "New conversation":
         conversation.title = title_from_content(request.content)
@@ -424,14 +442,15 @@ def stream_chat_in_conversation(
 
     request_workspace = _request_workspace(request)
     workspace = request_workspace
+    active_file = _active_file_for_request(request, workspace)
 
     yield {"type": "conversation", "conversation": conversation_summary(conversation).model_dump(mode="json")}
 
     chunks: list[str] = []
     result: model_router_service.IntentChatResult | None = None
-    active_task = _get_pending_task(db, conversation.id)
+    active_task = _get_pending_task(db, conversation.id, active_file)
     active_task_state = _task_state(active_task)
-    intent_prompt_messages = _load_prompt_messages(db, conversation, None, request.content)
+    intent_prompt_messages = _latest_user_intent_messages(request.content)
     decision = intent_service.analyze_intent(intent_prompt_messages, active_task=active_task_state)
     logger.info(
         "Precomputed intent decision intent=%s confidence=%.2f missing_slots=%s slots=%s active_task=%s",
@@ -447,6 +466,7 @@ def stream_chat_in_conversation(
         workspace,
         request.content,
         preferred_symbols=_slot_symbols(decision),
+        active_file=active_file,
     )
     prompt_messages = _append_planner_message(prompt_messages, decision)
     try:
@@ -474,9 +494,9 @@ def stream_chat_in_conversation(
     if result is None:
         result = model_router_service.IntentChatResult(content=answer, decision=None, executed=False)
     patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
-    assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer)
+    assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer, active_file=active_file)
     conversation.messages.append(assistant_message)
-    _sync_task_state(db, conversation.id, active_task, result)
+    _sync_task_state(db, conversation.id, active_file, active_task, result)
     touch(conversation)
     db.commit()
     db.refresh(assistant_message)

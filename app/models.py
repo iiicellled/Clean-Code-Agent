@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 
@@ -44,6 +44,7 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    active_file: Mapped[str | None] = mapped_column(String(260), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -59,6 +60,7 @@ class ConversationTask(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False
     )
     intent: Mapped[str] = mapped_column(String(50), nullable=False)
+    active_file: Mapped[str | None] = mapped_column(String(260), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_slots")
     slots_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     missing_slots_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

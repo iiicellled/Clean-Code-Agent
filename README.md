@@ -72,7 +72,7 @@ flowchart TD
 
 ### 3. 主模型的意图识别
 
-主模型把最近对话压缩为一个结构化决策。当前意图集合包括：
+主模型把当前最新用户输入压缩为一个结构化决策。意图识别阶段不会再读取旧的 20 条历史消息来猜关键词；如果当前文件下存在未完成任务，则只合并该任务的已填槽位和用户最新输入。当前意图集合包括：
 
 ```text
 general_chat
@@ -191,16 +191,19 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 数据库保存：
 
 - 会话标题、创建时间和更新时间
-- 用户 / 助手 / system 消息
-- 未完成代码任务的意图、slots 和 missing_slots
+- 用户 / 助手 / system 消息，以及消息产生时的 `active_file`
+- 未完成代码任务的意图、`active_file`、slots 和 missing_slots
 
 数据库不再保存代码快照，也不保存本地文件内容。当前工作区状态来自前端当前打开的文件，并随每次会话请求提交给后端。
 
 当前上下文策略：
 
-- 最多取最近 `20` 条消息作为对话上下文
+- 每条用户/助手消息都会记录当轮请求对应的 `active_file`
+- 加载模型上下文时，只取当前 `active_file` 相同的最近 `20` 条消息
 - 当前活动文件会经过 `current_file_search_tool` 搜索后写入 system message
-- 如果存在未补全的代码任务，会从 `conversation_tasks` 中恢复已填槽位和缺失槽位
+- 如果当前文件下存在未补全的代码任务，会从 `conversation_tasks` 中恢复已填槽位和缺失槽位
+- 查找最近未完成任务时会按当前 `active_file` 过滤，避免 A 文件的缺槽任务污染 B 文件
+- 意图识别只看用户最新输入和当前文件下的未完成任务，不从旧历史消息里推断关键词
 - 用户在右侧代码区修改后的文件内容，会随下一轮请求一起提交给后端
 
 这使得系统可以支持连续交互，例如：
@@ -216,8 +219,8 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 | 表名 | 作用 |
 |---|---|
 | `conversations` | 保存会话标题、创建时间和更新时间 |
-| `messages` | 保存用户、助手和 system 消息 |
-| `conversation_tasks` | 保存意图路由中的任务状态、slots 和 missing_slots |
+| `messages` | 保存用户、助手和 system 消息，并记录消息对应的 `active_file` |
+| `conversation_tasks` | 保存按 `active_file` 隔离的任务状态、slots 和 missing_slots |
 
 表之间的关系：
 
@@ -237,19 +240,28 @@ erDiagram
         int conversation_id
         string role
         text content
+        string active_file
         datetime created_at
     }
     conversation_tasks {
         int id
         int conversation_id
         string intent
+        string active_file
         string status
         json slots_json
         json missing_slots_json
     }
 ```
 
-如果你从旧版本升级，数据库里可能残留旧的 `code_snapshots` 表。当前代码不会再读取或写入它；确认不需要旧数据后可以手动删除：
+如果你从旧版本升级，需要确保 `messages` 和 `conversation_tasks` 已包含 `active_file` 字段。旧数据库可以执行类似迁移：
+
+```sql
+ALTER TABLE messages ADD COLUMN active_file VARCHAR(260) NULL, ADD INDEX ix_messages_active_file (active_file);
+ALTER TABLE conversation_tasks ADD COLUMN active_file VARCHAR(260) NULL, ADD INDEX ix_conversation_tasks_active_file (active_file);
+```
+
+旧版本数据库里也可能残留 `code_snapshots` 表。当前代码不会再读取或写入它；确认不需要旧数据后可以手动删除：
 
 ```sql
 DROP TABLE code_snapshots;
@@ -543,7 +555,7 @@ POST   /api/conversations/{conversation_id}/chat
 POST   /api/conversations/{conversation_id}/chat/stream
 ```
 
-会话请求可以携带当前代码区状态：
+会话请求可以携带当前代码区状态。`active_file` 会用于当前文件搜索、消息上下文过滤和未完成任务隔离：
 
 ```json
 {
@@ -559,7 +571,7 @@ POST   /api/conversations/{conversation_id}/chat/stream
 }
 ```
 
-流式接口结束时，如果后端成功生成 patch，会在 `done` 事件中返回：
+会话详情和聊天响应中的消息对象会包含 `active_file`，用于标识该条消息属于哪个当前文件。流式接口结束时，如果后端成功生成 patch，会在 `done` 事件中返回：
 
 ```json
 {
