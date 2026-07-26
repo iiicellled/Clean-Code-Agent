@@ -1,18 +1,12 @@
 import re
 
-
-
-
 def check_customer(customer):
     """
-    检查 Customer 实例的所有成员变量是否均通过类内部的合法性检测。
+    识别 Customer 实例的每一个成员变量是否合法。
+    如果所有成员变量都通过类内部的检测函数，则返回 True，否则返回 False。
     """
-    # 确保传入的是 Customer 实例，防止空值或错误类型引发 AttributeError
-    if not isinstance(customer, Customer):
-        return False
-
-    # 使用 and 运算符实现短路求值，遇到不合法的属性立即返回 False，避免不必要的计算
-    return (
+    # 使用 and 链实现短路求值，外层使用 bool() 确保最终返回严格的布尔值
+    return bool(
         Customer.check_id(customer.id) and
         Customer.check_name(customer.name) and
         Customer.check_age(customer.age) and

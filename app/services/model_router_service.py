@@ -6,7 +6,7 @@ import logging
 
 from ..config import settings
 from ..model_service import RemoteModelError, coder_chat_model, primary_chat_model
-from ..schemas import ChatMessage
+from ..schemas import ChatMessage, WorkspaceState
 from . import chatbot_service, code_review_service, coder_service, intent_service
 from .intent_service import ActiveTaskState, IntentDecision
 from .service_configs import CODER_CONFIG
@@ -32,14 +32,16 @@ class IntentStreamEvent:
 def chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
+    workspace: WorkspaceState | None = None,
 ) -> str:
-    return handle_chat(messages, active_task=active_task).content
+    return handle_chat(messages, active_task=active_task, workspace=workspace).content
 
 
 def handle_chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
     decision: IntentDecision | None = None,
+    workspace: WorkspaceState | None = None,
 ) -> IntentChatResult:
     if not _intent_routing_available():
         logger.info("Intent routing unavailable or disabled; using coder model directly")
@@ -71,7 +73,7 @@ def handle_chat(
             content = raw_code.strip()
         return IntentChatResult(content=content, decision=decision, executed=True)
 
-    content = chatbot_service.chat(messages)
+    content = chatbot_service.chat(messages, workspace=workspace)
     return IntentChatResult(content=content, decision=decision, executed=False)
 
 
@@ -79,6 +81,7 @@ def stream_handle_chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
     decision: IntentDecision | None = None,
+    workspace: WorkspaceState | None = None,
 ) -> Iterator[IntentStreamEvent]:
     if not _intent_routing_available():
         logger.info("Intent routing unavailable or disabled; streaming coder model directly")
@@ -128,7 +131,7 @@ def stream_handle_chat(
         return
 
     chunks = []
-    for chunk in chatbot_service.stream_chat(messages):
+    for chunk in chatbot_service.stream_chat(messages, workspace=workspace):
         chunks.append(chunk)
         yield IntentStreamEvent(content=chunk)
     content = "".join(chunks).strip()
@@ -140,8 +143,9 @@ def stream_handle_chat(
 def stream_chat(
     messages: list[ChatMessage],
     active_task: ActiveTaskState | None = None,
+    workspace: WorkspaceState | None = None,
 ) -> Iterator[str]:
-    for event in stream_handle_chat(messages, active_task=active_task):
+    for event in stream_handle_chat(messages, active_task=active_task, workspace=workspace):
         if event.content:
             yield event.content
 

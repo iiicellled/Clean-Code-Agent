@@ -6,7 +6,8 @@ import logging
 from typing import Any
 
 import httpx
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
 from .config import Settings, settings
@@ -269,6 +270,67 @@ class LangChainChatModel(_ServiceConfigMixin):
         logger.info("%s model LangChain call succeeded: answer_chars=%d", self.stg.label, len(answer))
         return answer
 
+    def chat_with_tools(
+        self,
+        messages: list[ChatMessage],
+        cfg: ServiceModelConfig,
+        tools: list[BaseTool],
+        max_tool_calls: int = 2,
+    ) -> str:
+        if not tools:
+            return self.chat(messages, cfg)
+        if not self.configured:
+            raise RemoteModelError(f"{self.stg.label} model URL, name, or API key is empty")
+
+        logger.info(
+            "Calling %s model via LangChain tools: model=%s base_url=%s messages=%d tools=%s",
+            self.stg.label,
+            self.stg.model_name,
+            self.stg.model_url,
+            len(messages),
+            [tool.name for tool in tools],
+        )
+        tool_map = {tool.name: tool for tool in tools}
+        runnable = self._build_llm(cfg).bind_tools(tools)
+        langchain_messages: list[BaseMessage] = list(self._to_langchain_messages(messages))
+
+        try:
+            for tool_round in range(max_tool_calls + 1):
+                response = runnable.invoke(langchain_messages)
+                tool_calls = list(getattr(response, "tool_calls", None) or [])
+                if not tool_calls:
+                    answer = self._content_text(response).strip()
+                    if not answer:
+                        raise RemoteModelError(f"{self.stg.label} model returned an empty answer")
+                    logger.info("%s model LangChain tool call succeeded: answer_chars=%d", self.stg.label, len(answer))
+                    return answer
+
+                langchain_messages.append(response)
+                if tool_round >= max_tool_calls:
+                    logger.warning("%s model requested too many tool calls; returning latest content", self.stg.label)
+                    return self._content_text(response).strip()
+
+                for index, tool_call in enumerate(tool_calls):
+                    name = str(tool_call.get("name") or "")
+                    tool = tool_map.get(name)
+                    call_id = str(tool_call.get("id") or f"tool_call_{tool_round}_{index}")
+                    args = tool_call.get("args") or {}
+                    if tool is None:
+                        result = f"Tool error: unknown tool {name!r}."
+                    else:
+                        try:
+                            result = tool.invoke(args)
+                        except Exception as exc:
+                            logger.exception("LangChain tool execution failed tool=%s", name)
+                            result = f"Tool error: {exc}"
+                    langchain_messages.append(ToolMessage(content=str(result), tool_call_id=call_id))
+        except RemoteModelError:
+            raise
+        except Exception as exc:
+            logger.exception("%s model LangChain tool request failed", self.stg.label)
+            raise RemoteModelError(f"{self.stg.label} model tool request failed: {exc}") from exc
+
+        raise RemoteModelError(f"{self.stg.label} model returned no answer")
     def stream_chat(self, messages: list[ChatMessage], cfg: ServiceModelConfig):
         if not self.configured:
             raise RemoteModelError(f"{self.stg.label} model URL, name, or API key is empty")
@@ -323,6 +385,23 @@ class LangChainChatModel(_ServiceConfigMixin):
             logger.exception("%s model LangChain stream failed", self.stg.label)
             raise RemoteModelError(f"{self.stg.label} model stream failed: {exc}") from exc
 
+    def _build_llm(self, cfg: ServiceModelConfig) -> ChatOpenAI:
+        return ChatOpenAI(
+            model=self.stg.model_name,
+            api_key=self.stg.api_key,
+            base_url=self.stg.model_url.rstrip("/"),
+            timeout=self.stg.timeout_seconds,
+            temperature=cfg.temperature,
+            top_p=cfg.top_p,
+            max_tokens=self._effective_max_tokens(cfg),
+        )
+
+    @staticmethod
+    def _content_text(message: BaseMessage) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, list):
+            return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        return content if isinstance(content, str) else ""
     def remote_diagnostics(self) -> dict[str, Any]:
         return {"ok": self.configured, "provider": "langchain-openai", "model": self.stg.model_name}
 

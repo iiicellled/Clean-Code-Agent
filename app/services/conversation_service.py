@@ -24,7 +24,7 @@ from ..schemas import (
 )
 from . import intent_service, model_router_service, patch_service, planner_service
 from .service_configs import WORKSPACE_CONTEXT_PROMPT
-from ..tools import current_file_search_tool
+from ..context import current_file_search
 
 
 logging.basicConfig(level=logging.INFO)
@@ -183,12 +183,12 @@ def _workspace_context_message(
 ) -> ChatMessage | None:
     if workspace is None or not workspace.files:
         return None
-    search_result = current_file_search_tool.search_current_file(
+    search_result = current_file_search.search_current_file(
         workspace,
         latest_user,
         preferred_symbols=preferred_symbols,
     )
-    tool_text = current_file_search_tool.format_tool_result(search_result)
+    tool_text = current_file_search.format_tool_result(search_result)
     content = WORKSPACE_CONTEXT_PROMPT + "\n\n" + tool_text
     return ChatMessage(role="system", content=content)
 
@@ -293,11 +293,12 @@ def _load_prompt_messages(
 def _append_planner_message(
     prompt_messages: list[ChatMessage],
     decision: intent_service.IntentDecision,
+    workspace: WorkspaceState | None = None,
 ) -> list[ChatMessage]:
     if not intent_service.is_code_intent(decision.intent) or decision.missing_slots:
         return prompt_messages
     try:
-        planner_message = planner_service.build_planner_message(decision, prompt_messages)
+        planner_message = planner_service.build_planner_message(decision, prompt_messages, workspace=workspace)
     except RemoteModelError:
         logger.warning("Planner model failed; continuing without implementation plan")
         return prompt_messages
@@ -372,12 +373,13 @@ def chat_in_conversation(
         preferred_symbols=_slot_symbols(decision),
         active_file=active_file,
     )
-    prompt_messages = _append_planner_message(prompt_messages, decision)
+    prompt_messages = _append_planner_message(prompt_messages, decision, workspace)
     try:
         result = model_router_service.handle_chat(
             prompt_messages,
             active_task=active_task_state,
             decision=decision,
+            workspace=workspace,
         )
         answer = result.content
     except RemoteModelError as exc:
@@ -468,12 +470,13 @@ def stream_chat_in_conversation(
         preferred_symbols=_slot_symbols(decision),
         active_file=active_file,
     )
-    prompt_messages = _append_planner_message(prompt_messages, decision)
+    prompt_messages = _append_planner_message(prompt_messages, decision, workspace)
     try:
         for event in model_router_service.stream_handle_chat(
             prompt_messages,
             active_task=active_task_state,
             decision=decision,
+            workspace=workspace,
         ):
             if event.content:
                 chunks.append(event.content)

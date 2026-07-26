@@ -26,8 +26,8 @@
 
 | 模型角色 | 代码对象 | 默认用途 | 配置方式 |
 |---|---|---|---|
-| 主模型 | `primary_chat_model` | 普通聊天、意图识别、槽位抽取、代码审阅与整理、patch 前整理 | `PRIMARY_MODEL_URL`、`PRIMARY_MODEL_NAME`、`PRIMARY_API_KEY` |
-| coder 模型 | `coder_chat_model` | 根据结构化任务生成代码或函数替换实现 | `CODER_MODEL_URL`、`CODER_MODEL_NAME`、`CODER_API_KEY` |
+| 主模型 | `primary_chat_model` | 普通聊天、意图识别、槽位抽取、工作区代码检索 tool 调用、planner 计划生成、代码审阅与整理 | `PRIMARY_MODEL_URL`、`PRIMARY_MODEL_NAME`、`PRIMARY_API_KEY` |
+| coder 模型 | `coder_chat_model` | 只根据 planner 结果生成目标代码；不直接调用检索 tool，不直接读取完整工作区上下文 | `CODER_MODEL_URL`、`CODER_MODEL_NAME`、`CODER_API_KEY` |
 
 coder 模型实际部署的是 Clean-Code-Qwen merge 后的完整模型：
 
@@ -47,11 +47,18 @@ flowchart TD
     B --> C[加载最近对话和当前前端工作区]
     C --> D[intent_service 调用主模型识别意图]
     D --> E{intent}
-    E -->|general_chat| F[chatbot_service 调用主模型回答]
+    E -->|general_chat| F[chatbot_service 调用主模型]
+    F --> F1{需要解释/检索代码?}
+    F1 -->|是| F2[LangChain search_workspace tool 检索工作区]
+    F2 --> F
+    F1 -->|否| N[conversation_service 保存助手消息]
     E -->|code intent 且缺少槽位| G[返回追问]
-    E -->|code intent 且槽位完整| H[current_file_search_tool 搜索当前活动文件]
-    H --> I[planner_service 根据上下文生成实现计划]
-    I --> J[coder_service 基于计划构造 coder prompt]
+    E -->|code intent 且槽位完整| H[conversation_service 生成当前文件基础检索上下文]
+    H --> I[planner_service 调用主模型]
+    I --> I1{需要更多代码上下文?}
+    I1 -->|是| I2[LangChain search_workspace tool 检索工作区]
+    I2 --> I
+    I1 -->|否| J[coder_service 只读取 planner 结果]
     J --> K[coder_chat_model 调用 Clean-Code-Qwen]
     K --> L[code_review_service 调用主模型审阅和整理]
     L --> M[patch_service 生成函数级 patch 提议]
@@ -61,14 +68,16 @@ flowchart TD
 
 对应的核心代码位置：
 
-- `app/services/model_router_service.py`：决定走普通聊天、追问、代码生成还是代码审阅链路
+- `app/services/model_router_service.py`：决定走普通聊天、追问、代码生成还是代码审阅链路；只把 `workspace` 传给主模型聊天/tool 路径，不传给 coder 模型
 - `app/services/intent_service.py`：构造意图识别 prompt，要求主模型返回严格 JSON
-- `app/tools/current_file_search_tool.py`：在当前活动文件中搜索目标函数、类、调用点或关键词片段
-- `app/services/planner_service.py`：根据用户请求、意图槽位和当前文件检索结果生成给 coder 的实现计划
-- `app/services/coder_service.py`：将结构化任务和 planner 计划转成 coder 模型输入
+- `app/context/current_file_search.py`：内部代码检索组件，提供当前文件/工作区搜索、Python AST 定义块提取和片段格式化能力
+- `app/tools/agent_search_tool.py`：智能体工具，使用 LangChain `StructuredTool` 封装 `search_workspace`
+- `app/services/chatbot_service.py`：普通聊天服务；当用户询问代码解释、项目结构或函数行为时，主模型可通过 `search_workspace` tool 按需检索工作区
+- `app/services/planner_service.py`：代码任务的主模型规划器；可通过 `search_workspace` tool 检索代码，并生成给 coder 的实现计划
+- `app/services/coder_service.py`：有 planner 结果时只把 planner 结果传给 coder 模型；planner 失败时才退回旧的结构化任务/基础上下文 prompt
 - `app/services/code_review_service.py`：将 coder 生成的 raw code 交给主模型复核和整理
 - `app/services/patch_service.py`：把审阅后的代码整理成可一键应用的函数级 patch
-- `app/services/conversation_service.py`：负责消息、上下文、任务状态和 patch 返回
+- `app/services/conversation_service.py`：负责消息、上下文、任务状态、工作区传递和 patch 返回
 
 ### 3. 主模型的意图识别
 
@@ -124,24 +133,34 @@ unknown
 
 如果必填槽位缺失，后端不会立即调用 coder 模型，而是保存当前任务状态并让主模型生成追问。例如用户只说“帮我新增一个函数”，系统会继续询问函数名、参数和具体功能。
 
-### 4. 当前文件搜索与工作区上下文
+### 4. 当前文件搜索、工作区上下文与工具调用
 
 右侧代码区读取本地项目文件，但文件内容不由后端主动扫描本机磁盘。前端通过浏览器的 File System Access API 让用户选择项目目录，再读取用户打开的文本文件。每次用户发送消息时，前端会把当前代码区文件列表和 `active_file` 一起提交给会话接口。
 
-后端收到当前工作区后，会先做一次意图识别，拿到 `function_name` 或 `search_symbols`，再调用 `current_file_search_tool.search_current_file()` 只搜索当前活动文件。搜索结果会包含：
+当前版本里有两类检索能力，职责不同：
+
+- `app/context/current_file_search.py` 是内部检索组件，不是 agent tool。它提供 Python AST/缩进兜底的定义块提取、关键词窗口、调用片段、文件头部兜底等能力。
+- `app/tools/agent_search_tool.py` 是真正的 agent tool。它把同一套底层检索能力封装成 LangChain `StructuredTool`，tool 名称为 `search_workspace`。
+
+`conversation_service` 仍会为代码任务生成一份基础的当前活动文件检索上下文，作为 planner 的兜底事实来源。搜索结果通常包括：
 
 - 目标函数或类的完整定义块
 - 目标函数的调用片段
 - 关键词命中的上下文窗口
 - 文件头部 import 区域或前若干行兜底上下文
 
-这样可以避免把整个大文件都塞进模型上下文，同时让 coder 模型更稳定地生成局部修改。
+同时，主模型可以在两个位置自主调用 `search_workspace`：
+
+- `planner_service`：代码生成/修改任务中，planner 可以按需检索工作区，生成更准确的实现计划。
+- `chatbot_service`：普通聊天中，如果用户要求解释代码、询问类/函数行为、分析项目片段，主模型也可以调用同一个 tool 检索当前工作区。
+
+`coder_chat_model` 不直接使用 tool，也不直接读取完整工作区上下文。正常链路下，coder 只消费 planner 生成的实现计划。
 
 ### 5. Planner 如何把代码上下文转成实现计划
 
-早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本新增了 `planner_service`：主模型会先阅读用户请求、意图槽位和当前文件检索结果，提炼出更明确的实现计划，再把计划传给 coder 模型。
+早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本改为主模型先规划、coder 后执行：`planner_service` 会阅读用户请求、意图槽位、基础当前文件上下文，并可通过 LangChain `search_workspace` tool 继续检索工作区，然后输出给 coder 使用的短计划。
 
-Planner 不负责写完整代码，而是输出给 coder 使用的短计划，通常包括：
+Planner 不负责写完整代码，而是输出实现约束和修改步骤，通常包括：
 
 - 要新增或修改的目标函数
 - 需要参考的类、函数、字段或调用方式
@@ -149,21 +168,23 @@ Planner 不负责写完整代码，而是输出给 coder 使用的短计划，�
 - 关键边界条件和异常情况
 - coder 应避免的错误，例如不要重写整个类、不要遗漏辅助逻辑
 
-这一步把“原始代码片段上下文”压缩成“实现约束和修改步骤”，让 coder 模型更聚焦。若 planner 调用失败，后端会继续执行；`coder_service` 会在没有 planner 计划时退回使用当前文件检索结果作为上下文。
+Planner 输出会被包装成以 `PLANNER_CONTEXT_PREFIX` 开头的 system message。`coder_service` 依赖这个前缀识别 planner 结果；如果识别到 planner message，coder 会进入 planner-only 模式。
+
+若 planner 调用失败，后端仍会继续执行；这时 `coder_service` 会退回旧 fallback prompt，使用结构化任务和基础当前文件上下文生成代码。
 
 ### 6. 主模型如何告知 coder 模型
 
 主模型和 coder 模型之间通过后端的结构化中间层衔接：
 
 1. `intent_service` 调用主模型，得到 `IntentDecision`。
-2. `conversation_service` 根据 `function_name`、`search_symbols` 和用户请求搜索当前活动文件。
-3. `planner_service` 根据当前文件检索结果生成给 coder 的实现计划。
-4. `model_router_service` 判断 `IntentDecision.ready_to_execute`。
-5. `coder_service` 读取 `language`、`task`、`constraints`、`function_name`、`parameters`、planner 计划和最新用户消息。
-6. 后端用 `CODER_USER_PROMPT_TEMPLATE` 重新组织成面向 coder 模型的 prompt。
-7. `coder_chat_model` 通过 OpenAI-compatible HTTP 请求调用远程 Clean-Code-Qwen。
+2. `conversation_service` 加载当前工作区，并生成基础当前文件上下文。
+3. `planner_service` 调用主模型；主模型可通过 LangChain `search_workspace` tool 进一步检索代码，并生成给 coder 的实现计划。
+4. `conversation_service` 把 planner 计划追加为 system message，前缀为 `PLANNER_CONTEXT_PREFIX`。
+5. `model_router_service` 在 code intent 分支调用 `coder_service.generate_code()`；此处不会把 `workspace` 传给 coder。
+6. `coder_service` 如果发现 planner message，只构造 planner-only prompt：不再拼接用户完整输入、结构化槽位、`search_current_file` 结果或补丁规则。
+7. `coder_chat_model` 通过 OpenAI-compatible HTTP 请求调用远程 Clean-Code-Qwen，只返回目标代码。
 
-对于 `create_function`，coder 模型被要求只返回完整的新目标函数。对于 `modify_function`，coder 模型被要求只返回目标函数的完整替换实现，并尽量保持函数名和调用兼容。
+对于 `create_function`，planner 会在计划中说明应新增的目标函数和签名；对于 `modify_function`，planner 会说明应替换的目标函数、兼容性要求和边界条件。coder 模型只负责按计划产出代码。
 
 ### 7. 主模型审阅与 patch 提议
 
@@ -200,7 +221,9 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 
 - 每条用户/助手消息都会记录当轮请求对应的 `active_file`
 - 加载模型上下文时，只取当前 `active_file` 相同的最近 `20` 条消息
-- 当前活动文件会经过 `current_file_search_tool` 搜索后写入 system message
+- 当前活动文件会经过 `app/context/current_file_search.py` 的基础搜索后写入 system message，主要供 planner 使用
+- 主模型在 planner/general chat 中可通过 LangChain `search_workspace` tool 继续检索工作区
+- coder 模型不直接调用 tool；有 planner 计划时只读取 planner-only prompt
 - 如果当前文件下存在未补全的代码任务，会从 `conversation_tasks` 中恢复已填槽位和缺失槽位
 - 查找最近未完成任务时会按当前 `active_file` 过滤，避免 A 文件的缺槽任务污染 B 文件
 - 意图识别只看用户最新输入和当前文件下的未完成任务，不从旧历史消息里推断关键词
@@ -252,19 +275,6 @@ erDiagram
         json slots_json
         json missing_slots_json
     }
-```
-
-如果你从旧版本升级，需要确保 `messages` 和 `conversation_tasks` 已包含 `active_file` 字段。旧数据库可以执行类似迁移：
-
-```sql
-ALTER TABLE messages ADD COLUMN active_file VARCHAR(260) NULL, ADD INDEX ix_messages_active_file (active_file);
-ALTER TABLE conversation_tasks ADD COLUMN active_file VARCHAR(260) NULL, ADD INDEX ix_conversation_tasks_active_file (active_file);
-```
-
-旧版本数据库里也可能残留 `code_snapshots` 表。当前代码不会再读取或写入它；确认不需要旧数据后可以手动删除：
-
-```sql
-DROP TABLE code_snapshots;
 ```
 
 ### 10. Python 代码运行
@@ -319,7 +329,8 @@ Local / Application Server
     - primary model client
     - coder model client
     - intent routing
-    - current-file search
+    - context search helpers
+    - LangChain search_workspace tool
     - implementation planning
     - code generation
     - code review
@@ -345,9 +356,9 @@ coder_agent/
     schemas.py                      # Pydantic API schema
     model_service.py                # 主模型和 coder 模型客户端
     services/
-      chatbot_service.py            # 普通聊天服务，由主模型处理
-      planner_service.py            # 根据当前文件上下文生成实现计划
-      coder_service.py              # 将结构化任务和 planner 计划转给 coder 模型
+      chatbot_service.py            # 普通聊天服务；主模型可按需调用 search_workspace tool
+      planner_service.py            # 主模型规划代码任务，可按需调用 search_workspace tool
+      coder_service.py              # 有 planner 结果时只把 planner 计划转给 coder 模型
       code_review_service.py        # 主模型审阅和整理 coder 输出
       code_runner_service.py        # Python 代码运行
       conversation_service.py       # 会话、上下文、任务状态、当前工作区和 patch 编排
@@ -355,8 +366,10 @@ coder_agent/
       model_router_service.py       # 模型路由与任务编排
       patch_service.py              # 函数级 patch 提议
       service_configs.py            # 各服务模型参数和提示词
+    context/
+      current_file_search.py        # 内部代码检索组件，非 agent tool
     tools/
-      current_file_search_tool.py   # 当前活动文件搜索工具
+      agent_search_tool.py           # LangChain StructuredTool：search_workspace
   web/
     index.html                      # Web 页面
     app.js                          # Vue、SSE、Monaco、本地文件和 patch 逻辑

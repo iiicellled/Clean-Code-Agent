@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-import ast
 import re
 from typing import TYPE_CHECKING
 
 from ..schemas import CodePatchProposal, WorkspaceState
+from ..context.current_file_search import (
+    compact_workspace_context,
+    definition_names,
+    first_definition_name,
+    is_python_language,
+    python_block_by_name,
+    requested_definition_names,
+)
 
 if TYPE_CHECKING:
     from .intent_service import IntentDecision
 
 
 CODE_BLOCK_RE = re.compile(r"```([^`\n]*)\n([\s\S]*?)```", re.MULTILINE)
-DEF_OR_CLASS_RE = re.compile(r"^\s*(?:async\s+def|def|class)\s+([A-Za-z_]\w*)\b", re.MULTILINE)
-PYTHON_DEF_RE = re.compile(r"^\s*(?:async\s+def|def)\s+([A-Za-z_]\w*)\s*\(", re.MULTILINE)
 
 
 def propose_patch(
@@ -55,14 +60,6 @@ def propose_patch(
     return None
 
 
-def compact_workspace_context(workspace: WorkspaceState | None, user_request: str = "", max_chars: int = 4500) -> str:
-    if workspace is None or not workspace.files:
-        return ""
-    active_file = next((file for file in workspace.files if file.path == workspace.active_file), workspace.files[0])
-    snippet = _relevant_snippet(active_file.content, user_request, active_file.language, max_chars=max_chars)
-    return f"Active file: {active_file.path}\nLanguage: {active_file.language}\nRelevant code:\n```{active_file.language}\n{snippet}\n```"
-
-
 def _propose_modify_function(
     file_path: str,
     source: str,
@@ -71,9 +68,9 @@ def _propose_modify_function(
     target_name: str,
     user_request: str,
 ) -> CodePatchProposal | None:
-    if not target_name or language.lower() not in {"python", "py"}:
+    if not target_name or not is_python_language(language):
         return None
-    old_code = _python_block_by_name(source, target_name)
+    old_code = python_block_by_name(source, target_name)
     if not old_code or source.count(old_code) != 1:
         return None
     candidate = _normalise_patch_code(new_code)
@@ -97,9 +94,9 @@ def _propose_create_function(
     target_name: str,
     user_request: str,
 ) -> CodePatchProposal | None:
-    if not target_name or language.lower() not in {"python", "py"}:
+    if not target_name or not is_python_language(language):
         return None
-    if _python_block_by_name(source, target_name):
+    if python_block_by_name(source, target_name):
         return None
     candidate = _normalise_patch_code(new_code)
     if not _contains_python_definition(candidate, target_name):
@@ -119,12 +116,14 @@ def _propose_create_function(
 def _ensure_trailing_newline(code: str) -> str:
     return code if code.endswith("\n") else code + "\n"
 
+
 def _normalise_patch_code(code: str) -> str:
     return (code or "").strip("\n")
 
 
 def _contains_python_definition(code: str, name: str) -> bool:
     return bool(name and re.search(rf"^\s*(?:async\s+def|def)\s+{re.escape(name)}\s*\(", code or "", re.MULTILINE))
+
 
 def _first_code_block(content: str) -> str:
     match = CODE_BLOCK_RE.search(content or "")
@@ -135,23 +134,23 @@ def _first_code_block(content: str) -> str:
 
 def _plain_code(content: str) -> str:
     text = (content or "").strip("\n")
-    return text if DEF_OR_CLASS_RE.search(text) else ""
+    return text if definition_names(text) else ""
 
 
 def _candidate_new_regions(source: str, new_code: str, user_request: str, language: str, target_name: str = "") -> list[str]:
-    if language.lower() not in {"python", "py"}:
+    if not is_python_language(language):
         return [new_code]
-    requested_names = [target_name] if target_name else _requested_definition_names(user_request, source)
-    new_names = _definition_names(new_code)
+    requested_names = [target_name] if target_name else requested_definition_names(user_request, source)
+    new_names = definition_names(new_code)
     candidates: list[str] = []
     ordered_names = [name for name in requested_names if name in new_names]
     ordered_names.extend(name for name in new_names if name not in ordered_names)
     for name in ordered_names:
-        block = _python_block_by_name(new_code, name)
+        block = python_block_by_name(new_code, name)
         if block:
             candidates.append(block.strip("\n"))
     if not candidates and len(new_names) == 1:
-        block = _python_block_by_name(new_code, new_names[0])
+        block = python_block_by_name(new_code, new_names[0])
         if block:
             candidates.append(block.strip("\n"))
     if not candidates and len(new_code) < max(400, int(len(source) * 0.65)):
@@ -160,19 +159,10 @@ def _candidate_new_regions(source: str, new_code: str, user_request: str, langua
 
 
 def _select_old_region(source: str, new_code: str, user_request: str, language: str, target_name: str = "") -> str:
-    name = target_name or _definition_name(new_code)
-    if name and language.lower() in {"python", "py"}:
-        return _python_block_by_name(source, name)
+    name = target_name or first_definition_name(new_code)
+    if name and is_python_language(language):
+        return python_block_by_name(source, name)
     return ""
-
-
-def _definition_name(code: str) -> str:
-    match = DEF_OR_CLASS_RE.search(code or "")
-    return match.group(1) if match else ""
-
-
-def _definition_names(code: str) -> list[str]:
-    return list(dict.fromkeys(DEF_OR_CLASS_RE.findall(code or "")))
 
 
 def _target_name(user_request: str, source: str, decision: "IntentDecision | None") -> str:
@@ -180,69 +170,13 @@ def _target_name(user_request: str, source: str, decision: "IntentDecision | Non
         value = decision.slots.get("function_name")
         if value:
             return _clean_identifier(value)
-    names = _requested_definition_names(user_request, source)
+    names = requested_definition_names(user_request, source)
     return names[0] if names else ""
 
 
 def _clean_identifier(value: str) -> str:
     match = re.search(r"[A-Za-z_]\w*", value or "")
     return match.group(0) if match else ""
-
-
-def _requested_definition_names(user_request: str, source: str) -> list[str]:
-    source_names = set(_definition_names(source))
-    requested = []
-    for token in re.findall(r"[A-Za-z_]\w+", user_request or ""):
-        if token in source_names and token not in requested:
-            requested.append(token)
-    return requested
-
-
-def _python_block_by_name(source: str, name: str) -> str:
-    if not name:
-        return ""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return _indent_block_by_name(source, name)
-    lines = source.splitlines(keepends=True)
-    candidates = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
-            start = getattr(node, "lineno", 0)
-            end = getattr(node, "end_lineno", 0)
-            if start and end:
-                candidates.append("".join(lines[start - 1:end]))
-    return candidates[0] if len(candidates) == 1 else ""
-
-
-def _indent_block_by_name(source: str, name: str) -> str:
-    lines = source.splitlines(keepends=True)
-    start_index = -1
-    start_indent = 0
-    pattern = re.compile(rf"^(\s*)(?:async\s+def|def|class)\s+{re.escape(name)}\b")
-    for index, line in enumerate(lines):
-        match = pattern.match(line)
-        if match:
-            start_index = index
-            start_indent = len(match.group(1))
-            break
-    if start_index < 0:
-        return ""
-    end_index = len(lines)
-    for index in range(start_index + 1, len(lines)):
-        line = lines[index]
-        if line.strip() and len(line) - len(line.lstrip()) <= start_indent:
-            end_index = index
-            break
-    return "".join(lines[start_index:end_index])
-
-
-def _first_matching_python_function(code: str, target_name: str) -> str:
-    for name in _definition_names(code):
-        if name == target_name:
-            return _indent_block_by_name(code, name)
-    return ""
 
 
 def _python_insert_anchor(source: str) -> str:
@@ -259,71 +193,6 @@ def _python_insert_anchor(source: str) -> str:
     if end > 0:
         return "".join(lines[:end])
     return lines[0]
-
-
-def _relevant_snippet(source: str, user_request: str, language: str, max_chars: int) -> str:
-    if len(source) <= max_chars:
-        return source
-    terms = [term.lower() for term in re.findall(r"[A-Za-z_]\w+", user_request or "") if len(term) >= 3]
-    target_names = _requested_definition_names(user_request, source)
-    if language.lower() in {"python", "py"} and target_names:
-        name = target_names[0]
-        parts = []
-        block = _python_block_by_name(source, name)
-        if block:
-            parts.append(f"# Target definition: {name}\n{block.strip()}")
-        usages = _usage_snippets(source, name, max_chars=max(800, max_chars // 2))
-        if usages:
-            parts.append(f"# Usage snippets for {name}\n{usages}")
-        snippet = "\n\n".join(parts)
-        if snippet:
-            return snippet[:max_chars]
-    if language.lower() in {"python", "py"} and terms:
-        for term in terms:
-            block = _python_block_by_name(source, term)
-            if block:
-                return block[:max_chars]
-    lines = source.splitlines()
-    hit = 0
-    for index, line in enumerate(lines):
-        lowered = line.lower()
-        if any(term in lowered for term in terms):
-            hit = index
-            break
-    start = max(0, hit - 60)
-    end = min(len(lines), hit + 100)
-    snippet = "\n".join(lines[start:end])
-    if len(snippet) > max_chars:
-        snippet = snippet[:max_chars] + "\n# ... truncated ..."
-    return snippet
-
-
-def _usage_snippets(source: str, name: str, max_chars: int) -> str:
-    lines = source.splitlines()
-    hits = []
-    pattern = re.compile(rf"(?<!def\s)\b{re.escape(name)}\s*\(")
-    def_pattern = re.compile(rf"^\s*(?:async\s+def|def)\s+{re.escape(name)}\s*\(")
-    for index, line in enumerate(lines):
-        if def_pattern.search(line):
-            continue
-        if pattern.search(line) or f".{name}(" in line:
-            hits.append(index)
-    ranges = []
-    for hit in hits[:8]:
-        start = max(0, hit - 8)
-        end = min(len(lines), hit + 9)
-        ranges.append((start, end))
-    merged = []
-    for start, end in ranges:
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    chunks = []
-    for start, end in merged:
-        chunks.append(f"# lines {start + 1}-{end}\n" + "\n".join(lines[start:end]))
-    text = "\n\n".join(chunks)
-    return text[:max_chars]
 
 
 def _summary_for_patch(user_request: str, old_code: str, new_code: str) -> str:

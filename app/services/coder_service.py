@@ -10,8 +10,6 @@ from .service_configs import (
     CODER_CREATE_FUNCTION_RULE,
     CODER_MODIFY_FUNCTION_RULE,
     CODER_PATCH_OUTPUT_RULE,
-    CODER_PLANNER_CONTEXT_PROMPT,
-    CODER_PLANNER_FOLLOW_RULE,
     CODER_USER_PROMPT_TEMPLATE,
     CODER_WORKSPACE_CONTEXT_PROMPT,
     PLANNER_CONTEXT_PREFIX,
@@ -43,15 +41,37 @@ def _build_coder_messages(
     messages: list[ChatMessage],
     config: ServiceModelConfig,
 ) -> list[ChatMessage]:
+    planner_context = next((
+        message.content for message in messages
+        if message.role == "system" and message.content.startswith(PLANNER_CONTEXT_PREFIX)
+    ), "")
+    if planner_context:
+        return [
+            ChatMessage(role="system", content=config.system_prompt),
+            ChatMessage(role="user", content=_planner_only_prompt(planner_context)),
+        ]
+
+    return [
+        ChatMessage(role="system", content=config.system_prompt),
+        ChatMessage(role="user", content=_fallback_prompt(decision, messages)),
+    ]
+
+
+def _planner_only_prompt(planner_context: str) -> str:
+    return (
+        "请严格根据下面的主模型实现计划生成代码。\n"
+        "不要重新分析用户需求，不要补充解释，不要输出 Markdown 代码围栏。\n"
+        "只返回计划要求的代码块。\n\n"
+        f"{planner_context[:4000]}"
+    )
+
+
+def _fallback_prompt(decision: IntentDecision, messages: list[ChatMessage]) -> str:
     slots = decision.slots
     latest_user = next((message.content for message in reversed(messages) if message.role == "user"), "")
     workspace_context = next((
         message.content for message in messages
         if message.role == "system" and message.content.startswith(WORKSPACE_CONTEXT_PREFIX)
-    ), "")
-    planner_context = next((
-        message.content for message in messages
-        if message.role == "system" and message.content.startswith(PLANNER_CONTEXT_PREFIX)
     ), "")
     prompt = CODER_USER_PROMPT_TEMPLATE.format(
         language=slots.get("language"),
@@ -62,20 +82,14 @@ def _build_coder_messages(
     function_name = slots.get("function_name") or ""
     parameters = slots.get("parameters") or ""
     if function_name:
-        prompt += f"\n\n目标函数：{function_name}"
+        prompt += f"\n\nTarget function: {function_name}"
     if parameters:
-        prompt += f"\n函数参数：{parameters}"
+        prompt += f"\nFunction parameters: {parameters}"
     if decision.intent == "create_function":
         prompt += "\n\n" + CODER_CREATE_FUNCTION_RULE
     elif decision.intent == "modify_function":
         prompt += "\n\n" + CODER_MODIFY_FUNCTION_RULE
-    if planner_context:
-        prompt += "\n\n" + CODER_PLANNER_CONTEXT_PROMPT + "\n" + planner_context[:3000]
-        prompt += "\n\n" + CODER_PLANNER_FOLLOW_RULE
-    if workspace_context and not planner_context:
+    if workspace_context:
         prompt += "\n\n" + CODER_WORKSPACE_CONTEXT_PROMPT + "\n" + workspace_context[:5000]
         prompt += "\n\n" + CODER_PATCH_OUTPUT_RULE
-    return [
-        ChatMessage(role="system", content=config.system_prompt),
-        ChatMessage(role="user", content=prompt),
-    ]
+    return prompt
