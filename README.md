@@ -48,7 +48,7 @@ flowchart TD
     C --> D[intent_service 调用主模型识别意图]
     D --> E{intent}
     E -->|general_chat| F[chatbot_service 调用主模型]
-    F --> F1{需要解释/检索代码?}
+    F --> F1{需要检索代码?}
     F1 -->|是| F2[LangChain search_workspace tool 检索工作区]
     F2 --> F
     F1 -->|否| N1[conversation_service 保存普通助手消息]
