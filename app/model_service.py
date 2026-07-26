@@ -331,6 +331,7 @@ class LangChainChatModel(_ServiceConfigMixin):
             raise RemoteModelError(f"{self.stg.label} model tool request failed: {exc}") from exc
 
         raise RemoteModelError(f"{self.stg.label} model returned no answer")
+
     def stream_chat(self, messages: list[ChatMessage], cfg: ServiceModelConfig):
         if not self.configured:
             raise RemoteModelError(f"{self.stg.label} model URL, name, or API key is empty")

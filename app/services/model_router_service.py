@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ import logging
 from ..config import settings
 from ..model_service import RemoteModelError, coder_chat_model, primary_chat_model
 from ..schemas import ChatMessage, WorkspaceState
-from . import chatbot_service, code_review_service, coder_service, intent_service
+from . import chatbot_service, code_review_service, coder_service, intent_service, planner_service
 from .intent_service import ActiveTaskState, IntentDecision
 from .service_configs import CODER_CONFIG
 
@@ -58,6 +58,7 @@ def handle_chat(
             )
             return IntentChatResult(content=content, decision=decision, executed=False)
 
+        messages = _append_planner_message(messages, decision, workspace)
         raw_code = coder_service.generate_code(decision, messages)
         try:
             content = code_review_service.review_and_present_code(
@@ -107,6 +108,7 @@ def stream_handle_chat(
             yield IntentStreamEvent(result=IntentChatResult(content=content, decision=decision, executed=False))
             return
 
+        messages = _append_planner_message(messages, decision, workspace)
         raw_code = coder_service.generate_code(decision, messages)
         chunks: list[str] = []
         review_failed = False
@@ -148,6 +150,19 @@ def stream_chat(
     for event in stream_handle_chat(messages, active_task=active_task, workspace=workspace):
         if event.content:
             yield event.content
+
+
+def _append_planner_message(
+    messages: list[ChatMessage],
+    decision: IntentDecision,
+    workspace: WorkspaceState | None = None,
+) -> list[ChatMessage]:
+    try:
+        planner_message = planner_service.build_planner_message(decision, messages, workspace=workspace)
+    except RemoteModelError:
+        logger.warning("Planner model failed; continuing without implementation plan")
+        return messages
+    return [*messages, planner_message]
 
 
 def _decide_intent(messages: list[ChatMessage], active_task: ActiveTaskState | None) -> IntentDecision:
