@@ -2,7 +2,7 @@
 
 `Clean Code Agent` 是一个基于 [iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 的代码生成与代码修改智能体应用。项目使用 FastAPI 实现后端 agent 编排，通过 OpenAI-compatible 接口调用远程 vLLM 部署的 Clean-Code-Qwen 模型，并提供一个 Web 页面用于会话、读取本地项目文件、在 Monaco Editor 中编辑代码、生成函数级 patch、运行 Python 代码。
 
-[iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型。本项目侧重模型应用层：将已经 merge 后的模型部署为远程 coder 模型，并在后端实现主模型路由、意图识别、当前文件代码搜索、代码生成、代码审阅、patch 提议、会话记忆和运行验证等 agent 功能。
+`Clean Code Qwen` 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型。本项目侧重模型应用层：将已经 merge 后的模型部署为远程 coder 模型，并在后端实现主模型路由、意图识别、当前文件代码搜索、代码生成、代码审阅、patch 提议、会话记忆和运行验证等 agent 功能。
 
 ![Web UI](figures/web.png)
 
@@ -51,7 +51,8 @@ flowchart TD
     F --> F1{需要解释/检索代码?}
     F1 -->|是| F2[LangChain search_workspace tool 检索工作区]
     F2 --> F
-    F1 -->|否| N[conversation_service 保存助手消息]
+    F1 -->|否| N1[conversation_service 保存普通助手消息]
+    N1 --> N2[返回普通聊天回复]
     E -->|code intent 且缺少槽位| G[返回追问]
     E -->|code intent 且槽位完整| H[conversation_service 生成当前文件基础检索上下文]
     H --> I[planner_service 调用主模型]
@@ -62,8 +63,8 @@ flowchart TD
     J --> K[coder_chat_model 调用 Clean-Code-Qwen]
     K --> L[code_review_service 调用主模型审阅和整理]
     L --> M[patch_service 生成函数级 patch 提议]
-    M --> N[conversation_service 保存助手消息并返回 patch]
-    N --> O[Web 代码区一键应用 / 保存本地文件]
+    M --> N3[conversation_service 保存助手消息并返回 patch]
+    N3 --> O[Web 代码区一键应用 / 保存本地文件]
 ```
 
 对应的核心代码位置：
