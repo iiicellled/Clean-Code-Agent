@@ -2,7 +2,7 @@
 
 `Clean Code Agent` 是一个基于 [iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 的代码生成与代码修改智能体应用。项目使用 FastAPI 实现后端 agent 编排，通过 OpenAI-compatible 接口调用远程 vLLM 部署的 Clean-Code-Qwen 模型，并提供一个 Web 页面用于会话、读取本地项目文件、在 Monaco Editor 中编辑代码、生成函数级 patch、运行 Python 代码。
 
-`Clean Code Qwen` 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型。本项目侧重模型应用层：将已经 merge 后的模型部署为远程 coder 模型，并在后端实现主模型路由、意图识别、当前文件代码搜索、代码生成、代码审阅、patch 提议、会话记忆和运行验证等 agent 功能。
+[iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型。本项目侧重模型应用层：将已经 merge 后的模型部署为远程 coder 模型，并在后端实现主模型路由、意图识别、当前文件代码搜索、代码生成、代码审阅、patch 提议、会话记忆和运行验证等 agent 功能。
 
 ![Web UI](figures/web.png)
 
