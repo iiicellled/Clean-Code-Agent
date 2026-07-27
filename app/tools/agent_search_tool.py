@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..schemas import WorkspaceState
 from ..context.current_file_search import format_workspace_tool_result, search_workspace
@@ -29,6 +29,24 @@ class SearchWorkspaceArgs(BaseModel):
     symbols: list[str] | None = Field(default=None, description="Optional Python function or class names to prioritize.")
     max_chars: int = Field(default=MAX_TOOL_RESULT_CHARS, ge=1000, le=MAX_TOOL_RESULT_CHARS)
     max_files: int = Field(default=8, ge=1, le=20)
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def parse_symbols(cls, value: Any) -> list[str] | None:
+        if value is None or isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+            return re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)
+        return [str(value)]
 
 
 @dataclass(frozen=True)
@@ -154,7 +172,15 @@ def _normalise_symbols(symbol: str, symbols: Any) -> list[str]:
     if isinstance(symbols, list):
         raw_values.extend(symbols)
     elif isinstance(symbols, str):
-        raw_values.append(symbols)
+        text = symbols.strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            raw_values.extend(parsed)
+        else:
+            raw_values.append(symbols)
 
     for raw in raw_values:
         for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(raw or "")):

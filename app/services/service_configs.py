@@ -119,6 +119,9 @@ WORKSPACE_CONTEXT_PROMPT = (
 
 PLANNER_USER_PROMPT_TEMPLATE = (
     "请输出给 coder 的简短实现计划，不要写代码，最多 5 条。\n"
+    "要求：\n"
+    "要明确目标函数名、参数、返回值含义。\n"
+    "如果当前文件检索结果中有类/函数定义，总结其中与实现相关的字段、方法、调用方式。\n"
     "意图：{intent}\n"
     "槽位：{slots}\n"
     "用户：{latest_user}\n"
