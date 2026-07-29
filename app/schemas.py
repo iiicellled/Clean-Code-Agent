@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
@@ -41,6 +41,7 @@ class ModelStatus(BaseModel):
     coder_model_name: str
     configured: bool
     model_routing_enabled: bool = False
+    agent_orchestration: str = "legacy"
     coder_configured: bool | None = None
     primary_model_name: str | None = None
     primary_configured: bool | None = None

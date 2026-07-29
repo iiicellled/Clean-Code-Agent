@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import settings
 from ..model_service import RemoteModelError
 from ..models import Conversation, ConversationTask, Message
 from ..schemas import (
@@ -166,6 +167,10 @@ def _request_workspace(request: ConversationChatRequest) -> WorkspaceState | Non
     active_file = request.active_file or files[0]["path"]
     return WorkspaceState(files=[CodeFile(**file) for file in files], active_file=active_file)
 
+
+
+def _use_langgraph_orchestration() -> bool:
+    return settings.agent_orchestration == "langgraph"
 
 
 def _active_file_for_request(request: ConversationChatRequest, workspace: WorkspaceState | None = None) -> str | None:
@@ -360,12 +365,23 @@ def chat_in_conversation(
         active_file=active_file,
     )
     try:
-        result = model_router_service.handle_chat(
-            prompt_messages,
-            active_task=active_task_state,
-            decision=decision,
-            workspace=workspace,
-        )
+        if _use_langgraph_orchestration():
+            from ..graph import graph_service
+
+            result = graph_service.handle_chat(
+                prompt_messages,
+                active_task=active_task_state,
+                decision=decision,
+                workspace=workspace,
+                user_request=request.content,
+            )
+        else:
+            result = model_router_service.handle_chat(
+                prompt_messages,
+                active_task=active_task_state,
+                decision=decision,
+                workspace=workspace,
+            )
         answer = result.content
     except RemoteModelError as exc:
         logger.exception("Model call failed conversation_id=%s", conversation.id)
@@ -375,7 +391,9 @@ def chat_in_conversation(
         raise HTTPException(status_code=500, detail=f"Conversation chat failed: {exc}") from exc
 
     display_answer = answer
-    patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
+    patch = getattr(result, "patch", None) if result.executed else None
+    if patch is None and result.executed:
+        patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision)
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer, active_file=active_file)
     conversation.messages.append(assistant_message)
     _sync_task_state(db, conversation.id, active_file, active_task, result)
@@ -456,17 +474,32 @@ def stream_chat_in_conversation(
         active_file=active_file,
     )
     try:
-        for event in model_router_service.stream_handle_chat(
-            prompt_messages,
-            active_task=active_task_state,
-            decision=decision,
-            workspace=workspace,
-        ):
-            if event.content:
-                chunks.append(event.content)
-                yield {"type": "delta", "content": event.content}
-            if event.result is not None:
-                result = event.result
+        if _use_langgraph_orchestration():
+            from ..graph import graph_service
+
+            # LangGraph stream compatibility: run the non-stream graph and emit one delta.
+            result = graph_service.handle_chat(
+                prompt_messages,
+                active_task=active_task_state,
+                decision=decision,
+                workspace=workspace,
+                user_request=request.content,
+            )
+            if result.content:
+                chunks.append(result.content)
+                yield {"type": "delta", "content": result.content}
+        else:
+            for event in model_router_service.stream_handle_chat(
+                prompt_messages,
+                active_task=active_task_state,
+                decision=decision,
+                workspace=workspace,
+            ):
+                if event.content:
+                    chunks.append(event.content)
+                    yield {"type": "delta", "content": event.content}
+                if event.result is not None:
+                    result = event.result
     except RemoteModelError as exc:
         logger.exception("Streaming model call failed conversation_id=%s", conversation.id)
         yield {"type": "error", "detail": str(exc)}
@@ -480,7 +513,9 @@ def stream_chat_in_conversation(
     display_answer = answer
     if result is None:
         result = model_router_service.IntentChatResult(content=answer, decision=None, executed=False)
-    patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision) if result.executed else None
+    patch = getattr(result, "patch", None) if result.executed else None
+    if patch is None and result.executed:
+        patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision)
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=display_answer, active_file=active_file)
     conversation.messages.append(assistant_message)
     _sync_task_state(db, conversation.id, active_file, active_task, result)

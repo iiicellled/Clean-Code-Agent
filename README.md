@@ -1,8 +1,8 @@
 ﻿# Clean Code Agent
 
-`Clean Code Agent` 是一个基于 [iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 的代码生成与代码修改智能体应用。项目使用 FastAPI 实现后端 agent 编排，通过 OpenAI-compatible 接口调用远程 vLLM 部署的 Clean-Code-Qwen 模型，并提供一个 Web 页面用于会话、读取本地项目文件、在 Monaco Editor 中编辑代码、生成函数级 patch、运行 Python 代码。
+`Clean Code Agent` 是一个面向本地代码修改场景的双模型代码智能体应用：主模型负责意图识别、任务规划、代码检索和审阅，远程 Clean-Code-Qwen coder 模型专注生成目标代码。后端基于 FastAPI 和 LangGraph 编排实现追问补槽、任务分流、planner-coder-review-patch 链路，前端提供会话、本地项目读取、Monaco Editor 编辑、函数级 patch 一键应用和 Python 运行验证能力。
 
-`Clean Code Qwen` 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型。本项目侧重模型应用层：将已经 merge 后的模型部署为远程 coder 模型，并在后端实现主模型路由、意图识别、当前文件代码搜索、代码生成、代码审阅、patch 提议、会话记忆和运行验证等 agent 功能。
+项目基于 [iiicellled/Clean-Code-Qwen](https://github.com/iiicellled/Clean-Code-Qwen) 构建应用层能力。`Clean Code Qwen` 是一个基于 `Qwen/Qwen2.5-Coder-7B-Instruct` 进行 SFT + DPO LoRA 微调的代码模型；本项目将 merge 后的模型通过 OpenAI-compatible/vLLM 服务接入为 coder 后端，并围绕真实代码工作流补齐上下文检索、会话记忆、代码审阅、patch 提议和运行验证。
 
 ![Web UI](figures/web.png)
 
@@ -35,7 +35,7 @@ coder 模型实际部署的是 Clean-Code-Qwen merge 后的完整模型：
 cleancode_qwen/output_models/qwen-coder-simplifier-dpo-merged
 ```
 
-开启 `MODEL_ROUTING_ENABLED=true` 后，后端会先调用主模型做意图识别，再根据识别结果决定进入普通聊天、追问、写代码、写函数或改函数链路。该版本建议启用模型路由；本地文件修改、函数级 patch 和追问补槽都依赖主模型的结构化决策。
+开启 `MODEL_ROUTING_ENABLED=true` 且配置 `AGENT_ORCHESTRATION=langgraph` 后，后端会先调用主模型做意图识别，再根据识别结果决定进入普通聊天、追问、写代码、写函数或改函数链路。该版本建议启用模型路由；本地文件修改、函数级 patch 和追问补槽都依赖主模型的结构化决策。
 
 ### 2. 后端 Agent 流程
 
@@ -66,6 +66,31 @@ flowchart TD
     M --> N3[conversation_service 保存助手消息并返回 patch]
     N3 --> O[Web 代码区一键应用 / 保存本地文件]
 ```
+#### LangGraph 标准编排
+
+当前项目保留 legacy 和 LangGraph 双轨编排：
+
+- `AGENT_ORCHESTRATION=legacy`：继续使用 `app/services/model_router_service.py` 的手写流程。
+- `AGENT_ORCHESTRATION=langgraph`：使用 `app/graph/graph_service.py` 的 `StateGraph`。
+
+LangGraph 版本不改动原业务 service，而是在 `app/graph/nodes/` 中把现有 service 包装成状态节点：
+
+```mermaid
+flowchart TD
+    A[intent_node] --> B{route_after_intent}
+    B -->|general_chat| C[chatbot_node]
+    B -->|missing_slots| D[follow_up_node]
+    B -->|code_ready| E[planner_node]
+    E --> F[coder_node]
+    F --> G[review_node]
+    G --> H[patch_node]
+    C --> I[END]
+    D --> I
+    H --> I
+```
+
+图状态定义在 `app/graph/state.py`，主要保存 `messages`、`workspace`、`active_task`、`decision`、`planner_messages`、`raw_code`、`content`、`executed` 和 `patch`。`conversation_service` 仍负责数据库、历史消息、任务状态同步和 API 返回，LangGraph 只负责单轮 Agent 编排。
+
 
 对应的核心代码位置：
 
@@ -396,6 +421,7 @@ python-dotenv
 SQLAlchemy
 PyMySQL
 langchain-openai
+langgraph
 ```
 
 远程模型训练、merge 和 vLLM 部署依赖可参考 `Clean-Code-Qwen` 的 requirements，其中包括：
@@ -480,6 +506,7 @@ VERIFY_CODER_TLS=true
 
 # Primary model for intent routing, general chat, code review, and patch-oriented cleanup.
 MODEL_ROUTING_ENABLED=true
+AGENT_ORCHESTRATION=langgraph
 PRIMARY_MODEL_URL=https://api.openai.com/v1
 PRIMARY_MODEL_NAME=
 PRIMARY_API_KEY=
@@ -495,6 +522,12 @@ DATABASE_URL=mysql+pymysql://user:password@127.0.0.1:3306/coder_agent?charset=ut
 uvicorn app.main:app --host 127.0.0.1 --port 18001
 ```
 
+
+运行 LangGraph 路由测试：
+
+```powershell
+python -m unittest discover -s tests
+```
 访问：
 
 ```text
@@ -568,6 +601,9 @@ DELETE /api/conversations/{conversation_id}
 POST   /api/conversations/{conversation_id}/chat
 POST   /api/conversations/{conversation_id}/chat/stream
 ```
+
+当前 Web 前端默认调用非流式 `/chat`。`/chat/stream` 仍保留兼容旧客户端；在 `AGENT_ORCHESTRATION=langgraph` 模式下会执行非流式图并一次性返回结果。
+
 
 会话请求可以携带当前代码区状态。`active_file` 会用于当前文件搜索、消息上下文过滤和未完成任务隔离：
 

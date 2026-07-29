@@ -1,4 +1,4 @@
-const { createApp, nextTick, markRaw } = Vue;
+﻿const { createApp, nextTick, markRaw } = Vue;
 
 const CODE_BLOCK_RE = /```([^`\n]*)\n([\s\S]*?)```/g;
 const LANGUAGE_EXTENSIONS = {
@@ -56,11 +56,11 @@ const MONACO_LANGUAGE_ALIASES = {
   text: "plaintext",
 };
 const MONACO_THEMES = {
-  auto: "跟随系统",
-  "clean-dark": "清爽深色",
-  "github-light": "GitHub 浅色",
-  "vs-dark": "VS 深色",
-  vs: "VS 浅色",
+  auto: "霍滄囂邉ｻ扈・,
+  "clean-dark": "貂・或豺ｱ濶ｲ",
+  "github-light": "GitHub 豬・牡",
+  "vs-dark": "VS 豺ｱ濶ｲ",
+  vs: "VS 豬・牡",
 };
 let customMonacoThemesDefined = false;
 let monacoPromise = null;
@@ -307,7 +307,7 @@ function loadMonacoEditor() {
   monacoPromise = new Promise((resolve, reject) => {
     const start = () => {
       if (!window.require) {
-        reject(new Error("代码编辑器加载器不可用"));
+        reject(new Error("莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ蝎ｨ荳榊庄逕ｨ"));
         return;
       }
       window.require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
@@ -320,7 +320,7 @@ function loadMonacoEditor() {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js";
     script.onload = start;
-    script.onerror = () => reject(new Error("代码编辑器加载器加载失败"));
+    script.onerror = () => reject(new Error("莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ蝎ｨ蜉霓ｽ螟ｱ雍･"));
     document.head.appendChild(script);
   });
   return monacoPromise;
@@ -333,7 +333,7 @@ createApp({
       running: false,
       runOutput: "",
       prompt: "",
-      modelStatus: "正在连接模型...",
+      modelStatus: "豁｣蝨ｨ霑樊磁讓｡蝙・..",
       historyEnabled: false,
       historyError: "",
       currentConversationId: null,
@@ -342,7 +342,7 @@ createApp({
         {
           localId: `welcome-${Date.now()}`,
           role: "assistant",
-          content: "代码精简助手已就绪。你可以直接提出代码需求，生成的代码会显示在右侧代码区。",
+          content: "莉｣遐∫ｲｾ邂蜉ｩ謇句ｷｲ蟆ｱ扈ｪ縲ゆｽ蜿ｯ莉･逶ｴ謗･謠仙・莉｣遐・怙豎ゑｼ檎函謌千噪莉｣遐∽ｼ壽仞遉ｺ蝨ｨ蜿ｳ萓ｧ莉｣遐∝玄縲・,
         },
       ],
       workspace: normalizeWorkspace(null),
@@ -447,7 +447,7 @@ createApp({
       this.flushEditorToActiveFile();
       const patch = this.patchProposal;
       if (!patch || !this.activeFile || this.activeFile.path !== patch.file_path) {
-        this.patchStatus = "Patch 不适用于当前文件";
+        this.patchStatus = "Patch 荳埼ら畑莠主ｽ灘燕譁・ｻｶ";
         return;
       }
       const content = this.activeFile.content || "";
@@ -458,7 +458,7 @@ createApp({
       }
       this.activeFile.content = content.replace(patch.old, patch.new);
       this.patchProposal = null;
-      this.patchStatus = "Patch 已应用于编辑器，请保存以覆写文件";
+      this.patchStatus = "Patch 蟾ｲ蠎皮畑莠守ｼ冶ｾ大勣・瑚ｯｷ菫晏ｭ倅ｻ･隕・・譁・ｻｶ";
       this.syncEditorToActiveFile();
     },
     discardPatchProposal() {
@@ -526,7 +526,7 @@ createApp({
           window.setTimeout(() => this.codeEditor?.layout(), 200);
         }
       } catch (error) {
-        this.monacoLoadError = "代码编辑器加载失败";
+        this.monacoLoadError = "莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ螟ｱ雍･";
       }
     },
     applyMonacoTheme() {
@@ -555,7 +555,7 @@ createApp({
     async loadConversations() {
       try {
         const response = await fetch("/api/conversations");
-        if (!response.ok) throw new Error(`历史会话不可用：${response.status}`);
+        if (!response.ok) throw new Error(`蜴・彰莨夊ｯ昜ｸ榊庄逕ｨ・・{response.status}`);
         this.conversations = await response.json();
         this.historyEnabled = true;
         this.historyError = "";
@@ -564,24 +564,24 @@ createApp({
         }
       } catch (error) {
         this.historyEnabled = false;
-        this.historyError = `数据库会话不可用：${error.message || "请检查 DATABASE_URL 和后端服务"}`;
+        this.historyError = `謨ｰ謐ｮ蠎謎ｼ夊ｯ昜ｸ榊庄逕ｨ・・{error.message || "隸ｷ譽譟･ DATABASE_URL 蜥悟錘遶ｯ譛榊苅"}`;
       }
     },
     async loadConversation(conversationId) {
       const response = await fetch(`/api/conversations/${conversationId}`);
-      if (!response.ok) throw new Error(`加载会话失败：${response.status}`);
+      if (!response.ok) throw new Error(`蜉霓ｽ莨夊ｯ晏､ｱ雍･・・{response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.messages = (data.messages || []).map((message) => ({ ...message, localId: `msg-${message.id}` }));
       this.scrollMessages();
     },
     async deleteConversation(conversation) {
-      const confirmed = window.confirm(`确认删除会话：${conversation.title || "新会话"}？`);
+      const confirmed = window.confirm(`遑ｮ隶､蛻髯､莨夊ｯ晢ｼ・{conversation.title || "譁ｰ莨夊ｯ・}・歔);
       if (!confirmed) return;
       const response = await fetch(`/api/conversations/${conversation.id}`, { method: "DELETE" });
       if (!response.ok && response.status !== 404) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `删除会话失败：${response.status}`);
+        throw new Error(error.detail || `蛻髯､莨夊ｯ晏､ｱ雍･・・{response.status}`);
       }
       this.conversations = this.conversations.filter((item) => item.id !== conversation.id);
       if (this.currentConversationId === conversation.id) this.startNewConversation();
@@ -596,7 +596,7 @@ createApp({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      if (!response.ok) throw new Error(`创建会话失败：${response.status}`);
+      if (!response.ok) throw new Error(`蛻帛ｻｺ莨夊ｯ晏､ｱ雍･・・{response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.conversations = [data, ...this.conversations.filter((item) => item.id !== data.id)];
@@ -610,12 +610,12 @@ createApp({
       this.prompt = "";
     },
     async loadWorkspaceStatus() {
-      this.workspaceStatus = this.supportsLocalDirectoryPicker ? "" : "当前浏览器不支持文件选择器; 请使用 Chrome 或 Edge.";
+      this.workspaceStatus = this.supportsLocalDirectoryPicker ? "" : "蠖灘燕豬剰ｧ亥勣荳肴髪謖∵枚莉ｶ騾画叫蝎ｨ; 隸ｷ菴ｿ逕ｨ Chrome 謌・Edge.";
     },
     async chooseWorkspaceDirectory() {
       if (!this.supportsLocalDirectoryPicker || this.openingWorkspace) return;
       this.openingWorkspace = true;
-      this.workspaceStatus = "打开文件夹...";
+      this.workspaceStatus = "謇灘ｼ譁・ｻｶ螟ｹ...";
       try {
         const handle = await window.showDirectoryPicker({ mode: "readwrite" });
         this.workspaceDirectoryHandle = markRaw(handle);
@@ -624,10 +624,10 @@ createApp({
         this.workspaceEntries = await collectLocalTextFiles(handle);
         this.selectedWorkspaceFile = this.workspaceEntries[0]?.path || "";
         this.workspaceStatus = this.workspaceEntries.length
-          ? `已选择: ${this.workspaceRoot} (含 ${this.workspaceEntries.length} 个文件)`
-          : `已选择: ${this.workspaceRoot} (未找到文件)`;
+          ? `蟾ｲ騾画叫: ${this.workspaceRoot} (蜷ｫ ${this.workspaceEntries.length} 荳ｪ譁・ｻｶ)`
+          : `蟾ｲ騾画叫: ${this.workspaceRoot} (譛ｪ謇ｾ蛻ｰ譁・ｻｶ)`;
       } catch (error) {
-        this.workspaceStatus = error?.name === "AbortError" ? "取消选择文件夹." : `Error: ${error.message}`;
+        this.workspaceStatus = error?.name === "AbortError" ? "蜿匁ｶ磯画叫譁・ｻｶ螟ｹ." : `Error: ${error.message}`;
       } finally {
         this.openingWorkspace = false;
       }
@@ -636,14 +636,14 @@ createApp({
       const path = this.selectedWorkspaceFile;
       if (!path || !this.workspaceDirectoryHandle || this.openingFile) return;
       this.openingFile = true;
-      this.workspaceStatus = "打开文件...";
+      this.workspaceStatus = "謇灘ｼ譁・ｻｶ...";
       try {
         const handle = await getFileHandleByPath(this.workspaceDirectoryHandle, path);
         const file = await handle.getFile();
         const content = await file.text();
         this.fileHandlesByPath.set(path, markRaw(handle));
         this.mergeWorkspaceFile({ path, language: languageFromPath(path), content });
-        this.workspaceStatus = `打开文件: ${path}`;
+        this.workspaceStatus = `謇灘ｼ譁・ｻｶ: ${path}`;
       } catch (error) {
         this.workspaceStatus = `Error: ${error.message}`;
       } finally {
@@ -661,7 +661,7 @@ createApp({
         const writable = await handle.createWritable();
         await writable.write(this.activeFile.content || "");
         await writable.close();
-        this.workspaceStatus = `保存文件: ${this.activeFile.path}`;
+        this.workspaceStatus = `菫晏ｭ俶枚莉ｶ: ${this.activeFile.path}`;
       } catch (error) {
         this.workspaceStatus = `Error: ${error.message}`;
       } finally {
@@ -681,16 +681,16 @@ createApp({
       await this.sendMessage(content);
     },
     async sendMessage(content) {
-      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "正在思考..." };
+      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "豁｣蝨ｨ諤晁・.." };
       this.messages.push({ localId: `user-${Date.now()}`, role: "user", content }, loading);
       this.busy = true;
       this.scrollMessages();
       try {
         if (!this.historyEnabled) {
-          throw new Error(this.historyError || '数据库会话不可用，请先配置 DATABASE_URL。');
+          throw new Error(this.historyError || '謨ｰ謐ｮ蠎謎ｼ夊ｯ昜ｸ榊庄逕ｨ・瑚ｯｷ蜈磯・鄂ｮ DATABASE_URL縲・);
         }
         const conversation = await this.ensureConversation();
-        await this.streamConversationChat(conversation.id, content, loading);
+        await this.sendConversationChat(conversation.id, content, loading);
         await this.loadConversations();
       } catch (error) {
         loading.content = `Error: ${error.message}`;
@@ -700,8 +700,8 @@ createApp({
         this.refreshStatus();
       }
     },
-    async streamConversationChat(conversationId, content, loading) {
-      const response = await fetch(`/api/conversations/${conversationId}/chat/stream`, {
+    async sendConversationChat(conversationId, content, loading) {
+      const response = await fetch(`/api/conversations/${conversationId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -710,11 +710,16 @@ createApp({
           active_file: this.workspace.active_file,
         }),
       });
-      if (!response.ok || !response.body) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `请求失败：${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || `请求失败: ${response.status}`);
       }
-      await this.readSse(response, loading, true);
+      if (data.conversation?.id) this.currentConversationId = data.conversation.id;
+      loading.content = data.message?.content || "Empty response.";
+      if (data.message?.id) loading.id = data.message.id;
+      this.patchProposal = data.patch || null;
+      this.patchStatus = this.patchProposal ? "Patch proposal is ready." : this.patchStatus;
+      this.scrollMessages();
     },
     async readSse(response, loading, hasConversationEvents) {
       const reader = response.body.getReader();
@@ -737,7 +742,7 @@ createApp({
             loading.content = answer || "Generating...";
             this.scrollMessages();
           } else if (event.type === "error") {
-            throw new Error(event.detail || "流式请求失败");
+            throw new Error(event.detail || "豬∝ｼ剰ｯｷ豎ょ､ｱ雍･");
           } else if (event.type === "done") {
             doneEvent = event;
           }
@@ -751,17 +756,18 @@ createApp({
       }
       if (doneEvent?.conversation?.id) this.currentConversationId = doneEvent.conversation.id;
       this.patchProposal = doneEvent?.patch || null;
-      this.patchStatus = this.patchProposal ? "Patch 提议已就绪." : this.patchStatus;
+      this.patchStatus = this.patchProposal ? "Patch 謠占ｮｮ蟾ｲ蟆ｱ扈ｪ." : this.patchStatus;
     },
     async refreshStatus() {
       try {
         const response = await fetch("/api/model/status");
         const data = await response.json();
-        const primaryName = data.primary_model_name || "主模型未配置";
-        const remoteName = data.coder_model_name || "代码模型";
-        this.modelStatus = data.configured ? `主模型：${primaryName} | Coder：${remoteName}` : `模型状态未知：${primaryName} | ${remoteName}`;
+        const primaryName = data.primary_model_name || "荳ｻ讓｡蝙区悴驟咲ｽｮ";
+        const remoteName = data.coder_model_name || "莉｣遐∵ｨ｡蝙・;
+        const orchestration = data.agent_orchestration || "legacy";
+        this.modelStatus = data.configured ? `荳ｻ讓｡蝙具ｼ・{primaryName} | Coder・・{remoteName} | ${orchestration}` : `讓｡蝙狗憾諤∵悴遏･・・{primaryName} | ${remoteName} | ${orchestration}`;
       } catch {
-        this.modelStatus = "服务状态未知";
+        this.modelStatus = "譛榊苅迥ｶ諤∵悴遏･";
       }
     },
     async copyActiveFile() {
@@ -773,7 +779,7 @@ createApp({
       this.flushEditorToActiveFile();
       if (!this.canRunActiveFile) return;
       this.running = true;
-      this.runOutput = "运行中...";
+      this.runOutput = "霑占｡御ｸｭ...";
       try {
         const response = await fetch("/api/code/run", {
           method: "POST",
@@ -781,11 +787,11 @@ createApp({
           body: JSON.stringify({ language: "python", code: this.activeFile.content }),
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || `运行失败：${response.status}`);
+        if (!response.ok) throw new Error(data.detail || `霑占｡悟､ｱ雍･・・{response.status}`);
         const output = [data.stdout, data.stderr].filter(Boolean).join("\n").trim();
-        this.runOutput = output || "无输出。";
+        this.runOutput = output || "譌霎灘・縲・;
       } catch (error) {
-        this.runOutput = `错误：${error.message}`;
+        this.runOutput = `髞呵ｯｯ・・{error.message}`;
       } finally {
         this.running = false;
       }

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -53,7 +53,7 @@ def unhandled_exception_handler(request, exc: Exception) -> JSONResponse:
 
 @app.on_event("startup")
 def startup() -> None:
-    logger.info("Starting Coder Agent: database_configured=%s routing_enabled=%s coder_configured=%s primary_configured=%s", settings.database_url is not None, settings.model_routing_enabled, coder_chat_model.configured, primary_chat_model.configured)
+    logger.info("Starting Coder Agent: database_configured=%s routing_enabled=%s orchestration=%s coder_configured=%s primary_configured=%s", settings.database_url is not None, settings.model_routing_enabled, settings.agent_orchestration, coder_chat_model.configured, primary_chat_model.configured)
     init_db()
 
 
@@ -76,6 +76,7 @@ def model_status() -> ModelStatus:
         coder_ping_url=settings.coder_ping_url,
         configured=chat_model.configured,
         model_routing_enabled=settings.model_routing_enabled,
+        agent_orchestration=settings.agent_orchestration,
         coder_model_name=coder_chat_model.model_name,
         coder_configured=coder_chat_model.configured,
         primary_model_name=primary_chat_model.model_name or None,

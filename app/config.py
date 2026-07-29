@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from dataclasses import dataclass
@@ -28,6 +28,7 @@ def _base_coder_url(chat_url: str) -> str:
 class Settings:
     database_url: str | None = os.getenv("DATABASE_URL") or None
     model_routing_enabled: bool = _bool_from_env("MODEL_ROUTING_ENABLED", False)
+    agent_orchestration: str = os.getenv("AGENT_ORCHESTRATION", "legacy").strip().lower()
 
     coder_model_url: str = os.getenv("CODER_MODEL_URL", "http://127.0.0.1:9000/v1/chat/completions")
     coder_model_name: str = os.getenv("CODER_MODEL_NAME", "qwen-coder-simplifier-dpo-lora")
