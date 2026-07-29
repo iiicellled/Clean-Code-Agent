@@ -122,10 +122,10 @@ def _retry_compact_plan(
 
 def _fallback_plan(decision: IntentDecision, latest_user: str, workspace_context: str) -> str:
     slots = decision.slots
-    function_name = slots.get("function_name") or "逶ｮ譬・・謨ｰ"
-    parameters = slots.get("parameters") or "謖臥畑謌ｷ隕∵ｱら｡ｮ螳壼盾謨ｰ"
-    task = slots.get("task") or latest_user or "螳梧・逕ｨ謌ｷ隸ｷ豎・"
-    symbols = slots.get("search_symbols") or "蠖灘燕譁・ｻｶ譽邏｢扈捺棡荳ｭ逧・嶌蜈ｳ螳壻ｹ・"
+    function_name = slots.get("function_name") or "目标函数"
+    parameters = slots.get("parameters") or "使用用户要求中的函数参数"
+    task = slots.get("task") or latest_user or "完成用户的代码实现需求"
+    symbols = slots.get("search_symbols") or "当前文件检索结果中的相关类或函数"
     has_workspace_context = "Results:" in workspace_context and "No relevant snippets" not in workspace_context
     lines = [
         line.format(
