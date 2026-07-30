@@ -512,7 +512,7 @@ textarea:focus {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f6f8fa;
+  background: #ffffff;
   margin: 0 0 12px;
 }
 
