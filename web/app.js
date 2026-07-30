@@ -56,11 +56,11 @@ const MONACO_LANGUAGE_ALIASES = {
   text: "plaintext",
 };
 const MONACO_THEMES = {
-  auto: "霍滄囂邉ｻ扈・,
-  "clean-dark": "貂・或豺ｱ濶ｲ",
-  "github-light": "GitHub 豬・牡",
-  "vs-dark": "VS 豺ｱ濶ｲ",
-  vs: "VS 豬・牡",
+  auto: "Auto",
+  "clean-dark": "Clean Dark",
+  "github-light": "GitHub Light",
+  "vs-dark": "VS Dark",
+  vs: "VS Light",
 };
 let customMonacoThemesDefined = false;
 let monacoPromise = null;
@@ -307,7 +307,7 @@ function loadMonacoEditor() {
   monacoPromise = new Promise((resolve, reject) => {
     const start = () => {
       if (!window.require) {
-        reject(new Error("莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ蝎ｨ荳榊庄逕ｨ"));
+        reject(new Error("Monaco editor loader is unavailable"));
         return;
       }
       window.require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
@@ -320,7 +320,7 @@ function loadMonacoEditor() {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js";
     script.onload = start;
-    script.onerror = () => reject(new Error("莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ蝎ｨ蜉霓ｽ螟ｱ雍･"));
+    script.onerror = () => reject(new Error("Failed to load Monaco editor"));
     document.head.appendChild(script);
   });
   return monacoPromise;
@@ -333,7 +333,7 @@ createApp({
       running: false,
       runOutput: "",
       prompt: "",
-      modelStatus: "豁｣蝨ｨ霑樊磁讓｡蝙・..",
+      modelStatus: "Connecting to models...",
       historyEnabled: false,
       historyError: "",
       currentConversationId: null,
@@ -342,7 +342,7 @@ createApp({
         {
           localId: `welcome-${Date.now()}`,
           role: "assistant",
-          content: "莉｣遐∫ｲｾ邂蜉ｩ謇句ｷｲ蟆ｱ扈ｪ縲ゆｽ蜿ｯ莉･逶ｴ謗･謠仙・莉｣遐・怙豎ゑｼ檎函謌千噪莉｣遐∽ｼ壽仞遉ｺ蝨ｨ蜿ｳ萓ｧ莉｣遐∝玄縲・,
+          content: "Clean Code Agent is ready. Open a local project file and ask for a code change; I will propose a function-level patch you can apply.",
         },
       ],
       workspace: normalizeWorkspace(null),
@@ -447,7 +447,7 @@ createApp({
       this.flushEditorToActiveFile();
       const patch = this.patchProposal;
       if (!patch || !this.activeFile || this.activeFile.path !== patch.file_path) {
-        this.patchStatus = "Patch 荳埼ら畑莠主ｽ灘燕譁・ｻｶ";
+        this.patchStatus = "Patch does not match the active file.";
         return;
       }
       const content = this.activeFile.content || "";
@@ -458,7 +458,7 @@ createApp({
       }
       this.activeFile.content = content.replace(patch.old, patch.new);
       this.patchProposal = null;
-      this.patchStatus = "Patch 蟾ｲ蠎皮畑莠守ｼ冶ｾ大勣・瑚ｯｷ菫晏ｭ倅ｻ･隕・・譁・ｻｶ";
+      this.patchStatus = "Patch applied in the editor. Save the file to write it to disk.";
       this.syncEditorToActiveFile();
     },
     discardPatchProposal() {
@@ -526,7 +526,7 @@ createApp({
           window.setTimeout(() => this.codeEditor?.layout(), 200);
         }
       } catch (error) {
-        this.monacoLoadError = "莉｣遐∫ｼ冶ｾ大勣蜉霓ｽ螟ｱ雍･";
+        this.monacoLoadError = "Failed to load Monaco editor";
       }
     },
     applyMonacoTheme() {
@@ -555,7 +555,7 @@ createApp({
     async loadConversations() {
       try {
         const response = await fetch("/api/conversations");
-        if (!response.ok) throw new Error(`蜴・彰莨夊ｯ昜ｸ榊庄逕ｨ・・{response.status}`);
+        if (!response.ok) throw new Error(`Failed to load conversation: ${response.status}`);
         this.conversations = await response.json();
         this.historyEnabled = true;
         this.historyError = "";
@@ -564,24 +564,24 @@ createApp({
         }
       } catch (error) {
         this.historyEnabled = false;
-        this.historyError = `謨ｰ謐ｮ蠎謎ｼ夊ｯ昜ｸ榊庄逕ｨ・・{error.message || "隸ｷ譽譟･ DATABASE_URL 蜥悟錘遶ｯ譛榊苅"}`;
+        this.historyError = `Conversation storage is unavailable: ${error.message || "Check DATABASE_URL and the backend service"}`;
       }
     },
     async loadConversation(conversationId) {
       const response = await fetch(`/api/conversations/${conversationId}`);
-      if (!response.ok) throw new Error(`蜉霓ｽ莨夊ｯ晏､ｱ雍･・・{response.status}`);
+      if (!response.ok) throw new Error(`Failed to load conversation: ${response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.messages = (data.messages || []).map((message) => ({ ...message, localId: `msg-${message.id}` }));
       this.scrollMessages();
     },
     async deleteConversation(conversation) {
-      const confirmed = window.confirm(`遑ｮ隶､蛻髯､莨夊ｯ晢ｼ・{conversation.title || "譁ｰ莨夊ｯ・}・歔);
+      const confirmed = window.confirm(`确认删除会话：${conversation.title || "New conversation"}？`);
       if (!confirmed) return;
       const response = await fetch(`/api/conversations/${conversation.id}`, { method: "DELETE" });
       if (!response.ok && response.status !== 404) {
         const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || `蛻髯､莨夊ｯ晏､ｱ雍･・・{response.status}`);
+        throw new Error(error.detail || `Failed to delete conversation: ${response.status}`);
       }
       this.conversations = this.conversations.filter((item) => item.id !== conversation.id);
       if (this.currentConversationId === conversation.id) this.startNewConversation();
@@ -596,7 +596,7 @@ createApp({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      if (!response.ok) throw new Error(`蛻帛ｻｺ莨夊ｯ晏､ｱ雍･・・{response.status}`);
+      if (!response.ok) throw new Error(`Failed to load conversation: ${response.status}`);
       const data = await response.json();
       this.currentConversationId = data.id;
       this.conversations = [data, ...this.conversations.filter((item) => item.id !== data.id)];
@@ -610,12 +610,12 @@ createApp({
       this.prompt = "";
     },
     async loadWorkspaceStatus() {
-      this.workspaceStatus = this.supportsLocalDirectoryPicker ? "" : "蠖灘燕豬剰ｧ亥勣荳肴髪謖∵枚莉ｶ騾画叫蝎ｨ; 隸ｷ菴ｿ逕ｨ Chrome 謌・Edge.";
+      this.workspaceStatus = this.supportsLocalDirectoryPicker ? "" : "Current browser does not support folder selection. Use Chrome or Edge.";
     },
     async chooseWorkspaceDirectory() {
       if (!this.supportsLocalDirectoryPicker || this.openingWorkspace) return;
       this.openingWorkspace = true;
-      this.workspaceStatus = "謇灘ｼ譁・ｻｶ螟ｹ...";
+      this.workspaceStatus = "Opening folder...";
       try {
         const handle = await window.showDirectoryPicker({ mode: "readwrite" });
         this.workspaceDirectoryHandle = markRaw(handle);
@@ -624,10 +624,10 @@ createApp({
         this.workspaceEntries = await collectLocalTextFiles(handle);
         this.selectedWorkspaceFile = this.workspaceEntries[0]?.path || "";
         this.workspaceStatus = this.workspaceEntries.length
-          ? `蟾ｲ騾画叫: ${this.workspaceRoot} (蜷ｫ ${this.workspaceEntries.length} 荳ｪ譁・ｻｶ)`
-          : `蟾ｲ騾画叫: ${this.workspaceRoot} (譛ｪ謇ｾ蛻ｰ譁・ｻｶ)`;
+          ? `Selected: ${this.workspaceRoot} (${this.workspaceEntries.length} files)`
+          : `Selected: ${this.workspaceRoot} (no files found)`;
       } catch (error) {
-        this.workspaceStatus = error?.name === "AbortError" ? "蜿匁ｶ磯画叫譁・ｻｶ螟ｹ." : `Error: ${error.message}`;
+        this.workspaceStatus = error?.name === "AbortError" ? "Folder selection canceled." : `Error: ${error.message}`;
       } finally {
         this.openingWorkspace = false;
       }
@@ -636,14 +636,14 @@ createApp({
       const path = this.selectedWorkspaceFile;
       if (!path || !this.workspaceDirectoryHandle || this.openingFile) return;
       this.openingFile = true;
-      this.workspaceStatus = "謇灘ｼ譁・ｻｶ...";
+      this.workspaceStatus = "Opening file...";
       try {
         const handle = await getFileHandleByPath(this.workspaceDirectoryHandle, path);
         const file = await handle.getFile();
         const content = await file.text();
         this.fileHandlesByPath.set(path, markRaw(handle));
         this.mergeWorkspaceFile({ path, language: languageFromPath(path), content });
-        this.workspaceStatus = `謇灘ｼ譁・ｻｶ: ${path}`;
+        this.workspaceStatus = `Opened file: ${path}`;
       } catch (error) {
         this.workspaceStatus = `Error: ${error.message}`;
       } finally {
@@ -661,7 +661,7 @@ createApp({
         const writable = await handle.createWritable();
         await writable.write(this.activeFile.content || "");
         await writable.close();
-        this.workspaceStatus = `菫晏ｭ俶枚莉ｶ: ${this.activeFile.path}`;
+        this.workspaceStatus = `Saved file: ${this.activeFile.path}`;
       } catch (error) {
         this.workspaceStatus = `Error: ${error.message}`;
       } finally {
@@ -681,13 +681,13 @@ createApp({
       await this.sendMessage(content);
     },
     async sendMessage(content) {
-      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "豁｣蝨ｨ諤晁・.." };
+      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "Thinking..." };
       this.messages.push({ localId: `user-${Date.now()}`, role: "user", content }, loading);
       this.busy = true;
       this.scrollMessages();
       try {
         if (!this.historyEnabled) {
-          throw new Error(this.historyError || '謨ｰ謐ｮ蠎謎ｼ夊ｯ昜ｸ榊庄逕ｨ・瑚ｯｷ蜈磯・鄂ｮ DATABASE_URL縲・);
+          throw new Error(this.historyError || "Conversation storage is unavailable. Configure DATABASE_URL first.");
         }
         const conversation = await this.ensureConversation();
         await this.sendConversationChat(conversation.id, content, loading);
@@ -712,7 +712,7 @@ createApp({
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data.detail || `请求失败: ${response.status}`);
+        throw new Error(data.detail || `Request failed: ${response.status}`);
       }
       if (data.conversation?.id) this.currentConversationId = data.conversation.id;
       loading.content = data.message?.content || "Empty response.";
@@ -742,7 +742,7 @@ createApp({
             loading.content = answer || "Generating...";
             this.scrollMessages();
           } else if (event.type === "error") {
-            throw new Error(event.detail || "豬∝ｼ剰ｯｷ豎ょ､ｱ雍･");
+            throw new Error(event.detail || "Streaming request failed");
           } else if (event.type === "done") {
             doneEvent = event;
           }
@@ -756,18 +756,18 @@ createApp({
       }
       if (doneEvent?.conversation?.id) this.currentConversationId = doneEvent.conversation.id;
       this.patchProposal = doneEvent?.patch || null;
-      this.patchStatus = this.patchProposal ? "Patch 謠占ｮｮ蟾ｲ蟆ｱ扈ｪ." : this.patchStatus;
+      this.patchStatus = this.patchProposal ? "Patch proposal is ready." : this.patchStatus;
     },
     async refreshStatus() {
       try {
         const response = await fetch("/api/model/status");
         const data = await response.json();
-        const primaryName = data.primary_model_name || "荳ｻ讓｡蝙区悴驟咲ｽｮ";
-        const remoteName = data.coder_model_name || "莉｣遐∵ｨ｡蝙・;
+        const primaryName = data.primary_model_name || "Primary model not configured";
+        const remoteName = "cleancode-qwen" || "Coder model";
         const orchestration = data.agent_orchestration || "legacy";
-        this.modelStatus = data.configured ? `荳ｻ讓｡蝙具ｼ・{primaryName} | Coder・・{remoteName} | ${orchestration}` : `讓｡蝙狗憾諤∵悴遏･・・{primaryName} | ${remoteName} | ${orchestration}`;
+        this.modelStatus = data.configured ? `Primary: ${primaryName} | Coder: ${remoteName} | ${orchestration}` : `Model status unknown: ${primaryName} | ${remoteName} | ${orchestration}`;
       } catch {
-        this.modelStatus = "譛榊苅迥ｶ諤∵悴遏･";
+        this.modelStatus = "Model status unavailable";
       }
     },
     async copyActiveFile() {
@@ -779,7 +779,7 @@ createApp({
       this.flushEditorToActiveFile();
       if (!this.canRunActiveFile) return;
       this.running = true;
-      this.runOutput = "霑占｡御ｸｭ...";
+      this.runOutput = "Running...";
       try {
         const response = await fetch("/api/code/run", {
           method: "POST",
@@ -787,11 +787,11 @@ createApp({
           body: JSON.stringify({ language: "python", code: this.activeFile.content }),
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || `霑占｡悟､ｱ雍･・・{response.status}`);
+        if (!response.ok) throw new Error(data.detail || `Run failed: ${response.status}`);
         const output = [data.stdout, data.stderr].filter(Boolean).join("\n").trim();
-        this.runOutput = output || "譌霎灘・縲・;
+        this.runOutput = output || "No output.";
       } catch (error) {
-        this.runOutput = `髞呵ｯｯ・・{error.message}`;
+        this.runOutput = `Error: ${error.message}`;
       } finally {
         this.running = false;
       }
