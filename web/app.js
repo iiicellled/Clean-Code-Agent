@@ -681,7 +681,7 @@ createApp({
       await this.sendMessage(content);
     },
     async sendMessage(content) {
-      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "Thinking..." };
+      const loading = { localId: `loading-${Date.now()}`, role: "assistant", content: "Thinking...", nodeOutputs: [] };
       this.messages.push({ localId: `user-${Date.now()}`, role: "user", content }, loading);
       this.busy = true;
       this.scrollMessages();
@@ -701,7 +701,7 @@ createApp({
       }
     },
     async sendConversationChat(conversationId, content, loading) {
-      const response = await fetch(`/api/conversations/${conversationId}/chat`, {
+      const response = await fetch(`/api/conversations/${conversationId}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -710,15 +710,23 @@ createApp({
           active_file: this.workspace.active_file,
         }),
       });
-      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.detail || `Request failed: ${response.status}`);
       }
-      if (data.conversation?.id) this.currentConversationId = data.conversation.id;
-      loading.content = data.message?.content || "Empty response.";
-      if (data.message?.id) loading.id = data.message.id;
-      this.patchProposal = data.patch || null;
-      this.patchStatus = this.patchProposal ? "Patch proposal is ready." : this.patchStatus;
+      await this.readSse(response, loading);
+      this.scrollMessages();
+    },
+    addNodeOutput(message, output) {
+      if (!output?.content) return;
+      if (!Array.isArray(message.nodeOutputs)) message.nodeOutputs = [];
+      message.nodeOutputs.push({
+        localId: `node-${Date.now()}-${message.nodeOutputs.length}`,
+        node: output.node || "node",
+        title: output.title || output.node || "Node",
+        content: output.content || "",
+        open: true,
+      });
       this.scrollMessages();
     },
     async readSse(response, loading, hasConversationEvents) {
@@ -741,6 +749,8 @@ createApp({
             answer += event.content || "";
             loading.content = answer || "Generating...";
             this.scrollMessages();
+          } else if (event.type === "node_output") {
+            this.addNodeOutput(loading, event.output);
           } else if (event.type === "error") {
             throw new Error(event.detail || "Streaming request failed");
           } else if (event.type === "done") {

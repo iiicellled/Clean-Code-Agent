@@ -477,17 +477,27 @@ def stream_chat_in_conversation(
         if _use_langgraph_orchestration():
             from ..graph import graph_service
 
-            # LangGraph stream compatibility: run the non-stream graph and emit one delta.
-            result = graph_service.handle_chat(
+            for graph_event in graph_service.stream_chat(
                 prompt_messages,
                 active_task=active_task_state,
                 decision=decision,
                 workspace=workspace,
                 user_request=request.content,
-            )
-            if result.content:
-                chunks.append(result.content)
-                yield {"type": "delta", "content": result.content}
+            ):
+                if graph_event.node_output is not None:
+                    yield {
+                        "type": "node_output",
+                        "output": {
+                            "node": graph_event.node_output.node,
+                            "title": graph_event.node_output.title,
+                            "content": graph_event.node_output.content,
+                        },
+                    }
+                if graph_event.result is not None:
+                    result = graph_event.result
+                    if result.content:
+                        chunks.append(result.content)
+                        yield {"type": "delta", "content": result.content}
         else:
             for event in model_router_service.stream_handle_chat(
                 prompt_messages,

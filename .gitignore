@@ -3,3 +3,5 @@ __pycache__/
 /web/highlight.zip
 workspace/
 /figures/web1.png
+legacy/
+tests/

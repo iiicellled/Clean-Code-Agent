@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from typing import Iterator
 
 from langgraph.graph import END, StateGraph
 
@@ -29,6 +30,19 @@ class GraphChatResult:
     decision: IntentDecision | None
     executed: bool = False
     patch: CodePatchProposal | None = None
+
+
+@dataclass(frozen=True)
+class GraphNodeOutput:
+    node: str
+    title: str
+    content: str
+
+
+@dataclass(frozen=True)
+class GraphChatStreamEvent:
+    node_output: GraphNodeOutput | None = None
+    result: GraphChatResult | None = None
 
 
 def handle_chat(
@@ -59,6 +73,47 @@ def handle_chat(
         decision=final_state.get("decision"),
         executed=bool(final_state.get("executed")),
         patch=final_state.get("patch"),
+    )
+
+
+def stream_chat(
+    messages: list[ChatMessage],
+    active_task: ActiveTaskState | None = None,
+    decision: IntentDecision | None = None,
+    workspace: WorkspaceState | None = None,
+    user_request: str = "",
+) -> Iterator[GraphChatStreamEvent]:
+    if not _intent_routing_available():
+        logger.info("LangGraph routing unavailable or disabled; using coder model directly")
+        content = coder_chat_model.chat(messages, cfg=CODER_CONFIG)
+        yield GraphChatStreamEvent(result=GraphChatResult(content=content, decision=None, executed=True))
+        return
+
+    latest_user = user_request or next((message.content for message in reversed(messages) if message.role == "user"), "")
+    graph_input = {
+        "messages": messages,
+        "workspace": workspace,
+        "active_task": active_task,
+        "decision": decision,
+        "user_request": latest_user,
+        "executed": False,
+    }
+    final_state: CoderAgentState = dict(graph_input)
+    for update in _compiled_graph().stream(graph_input, stream_mode="updates"):
+        for node, node_state in update.items():
+            if isinstance(node_state, dict):
+                final_state.update(node_state)
+                output = _format_node_output(node, node_state, final_state)
+                if output is not None:
+                    yield GraphChatStreamEvent(node_output=output)
+
+    yield GraphChatStreamEvent(
+        result=GraphChatResult(
+            content=(final_state.get("content") or "").strip(),
+            decision=final_state.get("decision"),
+            executed=bool(final_state.get("executed")),
+            patch=final_state.get("patch"),
+        )
     )
 
 
@@ -110,6 +165,70 @@ def _compiled_graph():
     if _GRAPH is None:
         _GRAPH = _build_graph()
     return _GRAPH
+
+
+def _format_node_output(
+    node: str,
+    node_state: CoderAgentState,
+    final_state: CoderAgentState,
+) -> GraphNodeOutput | None:
+    titles = {
+        "intent": "Intent",
+        "follow_up": "Follow-up",
+        "chatbot": "Chatbot",
+        "planner": "Planner",
+        "coder": "Coder",
+        "review": "Review",
+        "patch": "Patch",
+    }
+    content = ""
+    if node == "intent":
+        decision = node_state.get("decision")
+        if decision is not None:
+            slots = "\n".join(
+                f"- {key}: {value}"
+                for key, value in decision.slots.items()
+                if value not in (None, "", [])
+            )
+            missing = ", ".join(decision.missing_slots) if decision.missing_slots else "none"
+            content = (
+                f"- intent: {decision.intent}\n"
+                f"- confidence: {decision.confidence:.2f}\n"
+                f"- missing_slots: {missing}"
+            )
+            if slots:
+                content += f"\n\nslots:\n{slots}"
+            if decision.follow_up_question:
+                content += f"\n\nfollow_up_question:\n{decision.follow_up_question}"
+    elif node == "planner":
+        planner_messages = node_state.get("planner_messages") or []
+        original_count = len(final_state.get("messages", []))
+        if len(planner_messages) > original_count:
+            content = planner_messages[-1].content
+        else:
+            content = "No extra plan was generated; continuing with the current context."
+    elif node == "coder":
+        raw_code = (node_state.get("raw_code") or "").strip()
+        if raw_code:
+            content = raw_code if raw_code.startswith("```") else f"```text\n{raw_code}\n```"
+    elif node in {"review", "follow_up", "chatbot"}:
+        content = (node_state.get("content") or "").strip()
+    elif node == "patch":
+        patch = node_state.get("patch")
+        if patch is not None:
+            content = f"- file: {patch.file_path}\n- summary: {patch.summary or 'No summary'}"
+        else:
+            content = "No directly applicable patch was generated."
+
+    content = _truncate_node_content(content)
+    if not content:
+        return None
+    return GraphNodeOutput(node=node, title=titles.get(node, node), content=content)
+
+def _truncate_node_content(content: str, limit: int = 12000) -> str:
+    if len(content) <= limit:
+        return content
+    return content[:limit].rstrip() + "\n\n...output truncated."
 
 
 def _intent_routing_available() -> bool:

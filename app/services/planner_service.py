@@ -1,6 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import json
 import logging
+import re
+from typing import Any
 
 from ..model_service import RemoteModelError, primary_chat_model
 from ..schemas import ChatMessage, WorkspaceState
@@ -11,8 +14,6 @@ from .service_configs import (
     PLANNER_COMPACT_USER_PROMPT_TEMPLATE,
     PLANNER_CONFIG,
     PLANNER_CONTEXT_PREFIX,
-    PLANNER_FALLBACK_INSUFFICIENT_CONTEXT_LINE,
-    PLANNER_FALLBACK_PLAN_LINES,
     PLANNER_USER_PROMPT_TEMPLATE,
     ServiceModelConfig,
     WORKSPACE_CONTEXT_PREFIX,
@@ -21,6 +22,14 @@ from .service_configs import (
 
 logger = logging.getLogger(__name__)
 MAX_PLANNER_TOOL_CALLS = 2
+MAX_CODE_FACT_CHARS = 3200
+REQUIRED_PLAN_KEYS = {
+    "target",
+    "current_code_facts",
+    "required_changes",
+    "constraints",
+    "uncertainties",
+}
 
 
 def build_planner_message(
@@ -64,12 +73,14 @@ def plan_code_change(
         planner_messages[1].content,
     )
     try:
-        plan = _call_planner_with_tools(planner_messages, workspace, config).strip()
+        raw_plan = _call_planner_with_tools(planner_messages, workspace, config).strip()
     except RemoteModelError as exc:
         logger.warning("Planner model returned no usable plan; retrying with compact planner prompt. error=%s", exc)
-        plan = _retry_compact_plan(decision, latest_user, workspace_context, config)
+        raw_plan = _retry_compact_plan(decision, latest_user, workspace_context, config)
+
+    plan = _normalise_plan_json(raw_plan, decision, latest_user, workspace_context)
     if not plan.strip():
-        logger.warning("Planner model returned blank plan text; using fallback plan")
+        logger.warning("Planner model returned blank plan text; using fallback JSON plan")
         plan = _fallback_plan(decision, latest_user, workspace_context)
     logger.info("Planner output intent=%s plan=%r", decision.intent, plan)
     return plan
@@ -120,22 +131,154 @@ def _retry_compact_plan(
         return _fallback_plan(decision, latest_user, workspace_context)
 
 
-def _fallback_plan(decision: IntentDecision, latest_user: str, workspace_context: str) -> str:
+def _normalise_plan_json(
+    raw_plan: str,
+    decision: IntentDecision,
+    latest_user: str,
+    workspace_context: str,
+) -> str:
+    if not raw_plan.strip():
+        return ""
+    data = _parse_json_object(raw_plan)
+    if data is None:
+        logger.warning("Planner did not return JSON; wrapping output in fallback JSON plan")
+        return _fallback_plan(decision, latest_user, workspace_context, planner_notes=raw_plan)
+    if not isinstance(data, dict):
+        return _fallback_plan(decision, latest_user, workspace_context, planner_notes=str(data))
+
+    fallback = json.loads(_fallback_plan(decision, latest_user, workspace_context))
+    normalised = {**fallback, **data}
+    normalised["target"] = _normalise_target(normalised.get("target"), fallback["target"], decision)
+    normalised["current_code_facts"] = _normalise_string_list(
+        normalised.get("current_code_facts"), fallback["current_code_facts"]
+    )
+    normalised["required_changes"] = _normalise_string_list(
+        normalised.get("required_changes"), fallback["required_changes"]
+    )
+    normalised["constraints"] = _without_line_number_instructions(
+        _normalise_string_list(normalised.get("constraints"), fallback["constraints"])
+    )
+    normalised["uncertainties"] = _normalise_string_list(
+        normalised.get("uncertainties"), fallback["uncertainties"]
+    )
+    if "implementation_notes" in normalised:
+        normalised["implementation_notes"] = _normalise_string_list(normalised.get("implementation_notes"), [])
+    normalised["insufficient_context"] = bool(normalised.get("insufficient_context", False))
+    return json.dumps(normalised, ensure_ascii=False, indent=2)
+
+
+def _parse_json_object(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if text.startswith("```json"):
+        text = text[7:].strip()
+    elif text.startswith("```"):
+        text = text[3:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", text)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _fallback_plan(
+    decision: IntentDecision,
+    latest_user: str,
+    workspace_context: str,
+    planner_notes: str = "",
+) -> str:
     slots = decision.slots
-    function_name = slots.get("function_name") or "目标函数"
-    parameters = slots.get("parameters") or "使用用户要求中的函数参数"
-    task = slots.get("task") or latest_user or "完成用户的代码实现需求"
-    symbols = slots.get("search_symbols") or "当前文件检索结果中的相关类或函数"
-    has_workspace_context = "Results:" in workspace_context and "No relevant snippets" not in workspace_context
-    lines = [
-        line.format(
-            function_name=function_name,
-            parameters=parameters,
-            task=task,
-            symbols=symbols,
-        )
-        for line in PLANNER_FALLBACK_PLAN_LINES
+    function_name = slots.get("function_name") or "target_symbol"
+    parameters = slots.get("parameters") or "除非用户明确指定，否则保持现有参数"
+    task = slots.get("task") or latest_user or "实现用户请求的代码修改。"
+    symbols = slots.get("search_symbols") or function_name
+    current_code_facts = _extract_relevant_code_facts(workspace_context)
+    has_workspace_context = bool(current_code_facts)
+    constraints = [
+        "不要使用行号作为修改指令。",
+        "使用符号名、函数/类签名和可见代码片段定位修改目标。",
+        "不要重写无关函数、类、import 或文件。",
+        "除非用户明确要求，否则保持现有公开函数签名。",
     ]
+    plan: dict[str, Any] = {
+        "target": {
+            "action": decision.intent,
+            "symbol": function_name,
+            "parameters": parameters,
+            "search_symbols": symbols,
+        },
+        "current_code_facts": current_code_facts,
+        "required_changes": [task],
+        "constraints": constraints,
+        "uncertainties": [],
+        "insufficient_context": not has_workspace_context,
+    }
+    if planner_notes.strip():
+        plan["implementation_notes"] = [planner_notes.strip()[:1200]]
     if not has_workspace_context:
-        lines.append(PLANNER_FALLBACK_INSUFFICIENT_CONTEXT_LINE)
-    return "\n".join(lines)
+        plan["uncertainties"].append(
+            "没有找到可靠的工作区代码片段；请根据用户需求和目标符号保守实现。"
+        )
+    return json.dumps(plan, ensure_ascii=False, indent=2)
+
+
+def _normalise_target(value: Any, fallback: dict[str, Any], decision: IntentDecision) -> dict[str, Any]:
+    if isinstance(value, dict):
+        target = {**fallback, **value}
+    else:
+        target = dict(fallback)
+    target["action"] = str(target.get("action") or decision.intent)
+    target["symbol"] = str(target.get("symbol") or target.get("function_name") or fallback.get("symbol") or "target_symbol")
+    return target
+
+
+def _normalise_string_list(value: Any, fallback: list[str]) -> list[str]:
+    if isinstance(value, list):
+        result = [str(item).strip() for item in value if str(item).strip()]
+    elif isinstance(value, str) and value.strip():
+        result = [value.strip()]
+    else:
+        result = []
+    return result or list(fallback)
+
+
+def _without_line_number_instructions(items: list[str]) -> list[str]:
+    result = [
+        item
+        for item in items
+        if not re.search(r"\bline\s+\d+\b|第\s*\d+\s*行", item, flags=re.IGNORECASE)
+    ]
+    guardrail = "不要使用行号作为修改指令；请改用准确的可见代码片段。"
+    if guardrail not in result:
+        result.insert(0, guardrail)
+    return result
+
+
+def _extract_relevant_code_facts(workspace_context: str) -> list[str]:
+    if not workspace_context.strip():
+        return []
+    code_blocks = re.findall(r"```(?:\w+)?\s*\n([\s\S]*?)```", workspace_context)
+    facts: list[str] = []
+    for block in code_blocks:
+        cleaned = block.strip()
+        if cleaned and cleaned not in facts:
+            facts.append(cleaned[:MAX_CODE_FACT_CHARS])
+        if len(facts) >= 3:
+            return facts
+
+    lines = []
+    for line in workspace_context.splitlines():
+        stripped = line.rstrip()
+        if stripped and not stripped.startswith(WORKSPACE_CONTEXT_PREFIX):
+            lines.append(stripped)
+        if sum(len(item) for item in lines) >= MAX_CODE_FACT_CHARS:
+            break
+    fallback = "\n".join(lines).strip()
+    return [fallback[:MAX_CODE_FACT_CHARS]] if fallback else []

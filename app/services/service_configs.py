@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -17,10 +17,11 @@ INTENT_CONFIG = ServiceModelConfig(
     top_p=1.0,
     max_new_tokens=1600,
     system_prompt=(
-        "你是一个意图识别与槽位抽取模块，只能返回严格 JSON。\n"
-        "请根据最近对话判断用户最新输入的意图。如果用户正在补充一个未完成任务的缺失槽位，请合并已有槽位和新输入。\n"
-        "如果必填槽位缺失或过于模糊，必须把它放入 missing_slots，并给出 follow_up_question。\n"
-        "槽位值请使用简短字符串；不确定的槽位值必须为 null。不要使用 Markdown。"
+        "你是一个代码智能体的意图识别器，只能返回严格 JSON。"
+        "请根据用户最新输入判断意图，并抽取后续代码任务需要的槽位。"
+        "如果当前有未完成任务，请把用户最新输入和已有槽位合并。"
+        "如果必填槽位缺失，请写入 missing_slots，并给出简短 follow_up_question。"
+        "不确定的槽位值必须为 null，不要使用 Markdown 或解释性文字。"
     ),
 )
 
@@ -29,7 +30,8 @@ CHATBOT_CONFIG = ServiceModelConfig(
     top_p=0.9,
     max_new_tokens=4096,
     system_prompt=(
-        "你是一个乐于助人的代码编程专家。请语气自然、条理清晰地回答用户的问题。"
+        "你是一个耐心、清晰的代码助手。请优先回答用户问题；"
+        "如果问题涉及当前工作区代码，请基于可见代码和工具检索结果回答，不要编造未知实现。"
     ),
 )
 
@@ -38,19 +40,22 @@ CODER_CONFIG = ServiceModelConfig(
     top_p=0.9,
     max_new_tokens=2048,
     system_prompt=(
-        "你是一个专注的代码生成模型。请只返回简洁、可读、可运行的代码。"
-        "不要使用 Markdown 代码围栏。除非注释是代码理解所必需的，否则不要添加解释。"
+        "你是一个专注的代码生成模型。请严格根据输入中的实现计划或任务要求生成代码。"
+        "不要擅自修改无关逻辑，不要编造未提供的原始代码。"
+        "除非调用方明确要求纯代码，否则把最终代码放在清晰的 Markdown 代码块中。"
     ),
 )
 
 PLANNER_CONFIG = ServiceModelConfig(
     temperature=0.0,
     top_p=1.0,
-    max_new_tokens=1200,
+    max_new_tokens=1800,
     system_prompt=(
-        "你是一个代码实现规划器。请阅读用户需求、意图槽位和当前文件检索结果，"
-        "提炼出给代码生成模型使用的简短实现计划。不要写完整代码。"
-        "必须指出要新增/修改的目标函数、需要参考的类/函数、关键调用方式、边界情况和避免事项。"
+        "你是代码修改任务的规划器。你的职责是阅读用户需求、可见的工作区代码片段和工具检索结果，"
+        "然后为 coder 模型输出一份紧凑、可执行的 JSON 实现计划。"
+        "只返回合法 JSON，不要使用 Markdown，不要编写最终代码。"
+        "不要用行号作为修改定位方式，因为 coder 不一定能看到原文件行号。"
+        "请用文件路径、符号名、函数/类签名、可见原始代码片段和行为要求来定位修改目标。"
     ),
 )
 
@@ -59,109 +64,150 @@ CODE_REVIEW_CONFIG = ServiceModelConfig(
     top_p=1.0,
     max_new_tokens=4096,
     system_prompt=(
-        "你是一个严谨的 Python 代码审阅与整理助手。"
-        "请根据用户需求检查候选代码，并直接修正明显错误、遗漏的边界条件、薄弱的异常处理和不清晰的命名。"
-        "最终回答要像正常助手回复一样自然，不要提到内部模型、路由、审阅流程或候选代码来源。"
+        "你是一个严格的代码审阅与整理助手。请根据用户需求检查 coder 输出是否正确，"
+        "必要时直接修正明显错误、边界条件和接口不一致问题。"
+        "最终回答应包含可直接使用的 Markdown 代码块，并附上不超过三句的简短说明。"
+        "不要展示内部模型路由、审阅过程或无关推理。"
     ),
 )
 
 
-CODER_USER_PROMPT_TEMPLATE = (
-    "请根据下面的结构化需求生成代码。\n"
-    "编程语言：{language}\n"
-    "任务：{task}\n"
-    "约束：{constraints}\n"
-    "用户最新输入：{latest_user}\n\n"
-    "请只返回简洁、可读、可运行的代码。不要使用 Markdown 代码围栏。"
-    "除非注释是代码理解所必需的，否则不要添加解释。"
-)
+CODER_USER_PROMPT_TEMPLATE = """
+请根据下面的结构化任务生成代码。
 
-CODE_REVIEW_USER_PROMPT_TEMPLATE = (
-    "请根据用户需求审阅并整理下面的候选代码。\n\n"
-    "编程语言：{language}\n"
-    "任务：{task}\n"
-    "约束：{constraints}\n"
-    "用户最新输入：{latest_user}\n\n"
-    "候选代码：\n"
-    "```python\n"
-    "{raw_code}\n"
-    "```\n\n"
-    "请完成：\n"
-    "1. 检查代码是否满足用户需求；如果有明显错误或边界条件缺失，请直接修正。\n"
-    "2. 尽量保持原始核心思路，避免做不必要的大幅重写。\n"
-    "3. 最终代码必须放在 Markdown 的 ```python 代码围栏中。\n"
-    "4. 在代码中添加必要、清楚的中文注释，但不要每一行都写注释。\n"
-    "5. 代码后最多用 3 句话说明核心思路和关键修正。\n"
-    "6. 不要暴露审阅过程，也不要提到候选代码来自内部模型。\n"
-)
+语言: {language}
+任务: {task}
+约束: {constraints}
+用户最新输入: {latest_user}
 
-WORKSPACE_CONTEXT_PREFIX = "当前可编辑代码工作区"
-PLANNER_CONTEXT_PREFIX = "给 coder 的实现计划"
+要求：
+- 只实现用户要求的代码，不要扩展无关功能。
+- 保持代码简洁、可读、可运行。
+- 如果是函数级任务，优先返回完整函数定义。
+""".strip()
+
+CODE_REVIEW_USER_PROMPT_TEMPLATE = """
+请审阅并整理下面的 coder 输出，使它满足用户需求。
+
+语言: {language}
+任务: {task}
+约束: {constraints}
+用户最新输入: {latest_user}
+
+coder 输出:
+```python
+{raw_code}
+```
+
+要求：
+1. 检查代码是否满足用户需求，若有明显错误请直接修正。
+2. 尽量保持原有签名、调用兼容性和边界语义。
+3. 最终代码必须放在 Markdown 的 ```python 代码块中。
+4. 可以在代码后附上不超过三句的简短说明。
+5. 不要展示内部审阅过程或模型路由信息。
+""".strip()
+
+WORKSPACE_CONTEXT_PREFIX = "当前可用代码工作区"
+PLANNER_CONTEXT_PREFIX = "给 coder 的结构化实现计划"
 
 WORKSPACE_CONTEXT_PROMPT = (
-    "当前可编辑代码工作区。请把下面的工具结果视为代码修改的事实来源。"
-    "该工具只搜索当前打开文件。如果要提出修改，优先替换一个完整函数，或插入聚焦的函数代码块。"
+    "当前可用代码工作区。请把下面的检索结果视为代码修改的事实来源。"
+    "如果需要生成 patch，应优先基于目标函数或类的完整定义块进行修改。"
 )
 
-# PLANNER_USER_PROMPT_TEMPLATE = (
-#     "请根据以下信息制定给 coder 模型使用的实现计划。\n"
-#     "要求：\n"
-#     "1. 不要输出完整代码。\n"
-#     "2. 明确目标函数名、参数、返回值含义。\n"
-#     "3. 如果当前文件检索结果中有类/函数定义，请总结其中与实现相关的字段、方法、调用方式。\n"
-#     "4. 指出 coder 需要避免的错误，例如不要重写整个类、不要遗漏辅助函数或 import、保持调用兼容。\n"
-#     "5. 输出控制在 8 条以内，尽量短。\n\n"
-#     "意图：{intent}\n"
-#     "槽位：{slots}\n"
-#     "用户最新输入：{latest_user}\n\n"
-#     "当前文件检索结果：\n{workspace_context}"
-# )
+PLANNER_USER_PROMPT_TEMPLATE = """
+请为 coder 模型生成一份结构化 JSON 实现计划。
 
-PLANNER_USER_PROMPT_TEMPLATE = (
-    "请输出给 coder 的简短实现计划，不要写代码，最多 5 条。\n"
-    "要求：\n"
-    "要明确目标函数名、参数、返回值含义。\n"
-    "如果当前文件检索结果中有类/函数定义，总结其中与实现相关的字段、方法、调用方式。\n"
-    "意图：{intent}\n"
-    "槽位：{slots}\n"
-    "用户：{latest_user}\n"
-    "检索结果：\n{workspace_context}"
+意图: {intent}
+槽位: {slots}
+用户最新需求: {latest_user}
+
+工作区上下文和检索结果:
+{workspace_context}
+
+只返回一个 JSON 对象，结构如下：
+{{
+  "target": {{
+    "action": "write_code | create_function | modify_function",
+    "file_path": "已知文件路径，否则为 null",
+    "symbol": "目标函数名或类名，未知则为 null",
+    "signature": "当前或期望的函数/类签名，未知则为 null",
+    "search_symbols": "用于定位目标的检索符号"
+  }},
+  "current_code_facts": [
+    "coder 可见的原始代码片段或可靠代码事实；如果能看到目标函数体，必须放在这里"
+  ],
+  "required_changes": [
+    "coder 必须实现的具体行为变化"
+  ],
+  "constraints": [
+    "不要使用行号作为修改指令。",
+    "不要重写无关函数、类、import 或文件。",
+    "除非用户明确要求，否则保持现有公开函数签名。"
+  ],
+  "implementation_notes": [
+    "可选，给 coder 的简短实现提示"
+  ],
+  "uncertainties": [
+    "可选，上下文不足或需要假设的地方"
+  ],
+  "insufficient_context": false
+}}
+
+规则：
+- 只返回合法 JSON，不要加 Markdown 代码围栏。
+- 不要说“修改第 N 行”，也不要依赖行号。
+- 如果当前函数/类代码可见，必须把相关原始代码片段放入 current_code_facts。
+- 如果上下文不足，将 insufficient_context 设为 true，并在 uncertainties 中说明缺少什么。
+""".strip()
+
+PLANNER_COMPACT_SYSTEM_PROMPT = (
+    "你是代码修改任务的规划器。只返回给 coder 使用的合法 JSON。"
+    "不要使用行号；请使用符号名和可见代码片段定位修改目标。"
 )
 
-PLANNER_COMPACT_SYSTEM_PROMPT = "你是代码实现规划器。只输出简短计划，不输出代码。"
+PLANNER_COMPACT_USER_PROMPT_TEMPLATE = """
+请生成一份紧凑的 JSON 实现计划。
 
-PLANNER_COMPACT_USER_PROMPT_TEMPLATE = (
-    "请输出给 coder 的简短实现计划，不要写代码，最多 5 条。\n"
-    "意图：{intent}\n"
-    "槽位：{slots}\n"
-    "用户：{latest_user}\n"
-    "检索结果：\n{workspace_context}"
-)
+意图: {intent}
+槽位: {slots}
+用户最新需求: {latest_user}
+工作区上下文:
+{workspace_context}
+
+只返回 JSON，字段包括：target, current_code_facts, required_changes, constraints, implementation_notes, uncertainties, insufficient_context。
+不要使用行号作为修改指令。
+""".strip()
 
 CODER_CREATE_FUNCTION_RULE = (
-    "函数输出规则：只返回完整的新目标函数。必须包含完整函数签名和函数体。"
-    "不要返回测试、示例、解释或整个文件；只有在代码运行确实需要时才附带必要 import 或辅助函数。"
+    "函数新增任务要求：只返回完整的新函数定义。"
+    "函数签名必须包含计划或用户要求中的函数名和参数。"
+    "不要返回测试代码、示例调用或整文件内容，除非用户明确要求。"
 )
 
 CODER_MODIFY_FUNCTION_RULE = (
-    "函数输出规则：只返回目标函数的完整替换实现。保持目标函数名不变，除非用户明确要求修改签名，否则保持调用兼容。"
-    "不要返回测试、示例、解释或整个文件；只有在代码运行确实需要时才附带必要 import 或辅助函数。"
+    "函数修改任务要求：只返回目标函数的完整替换实现。"
+    "优先保持函数名、参数列表和返回值语义兼容。"
+    "不要重写无关函数、类、import 或整文件内容。"
 )
 
-CODER_PLANNER_CONTEXT_PROMPT = "主模型实现计划："
-CODER_PLANNER_FOLLOW_RULE = "请优先遵循该计划；如果计划与用户明确要求冲突，以用户明确要求为准。"
+CODER_PLANNER_CONTEXT_PROMPT = "主模型结构化实现计划："
+CODER_PLANNER_FOLLOW_RULE = "请严格遵循该计划；若计划信息不足，请保守实现，不要编造未展示的原始代码。"
 CODER_WORKSPACE_CONTEXT_PROMPT = "当前文件相关上下文："
-CODE_REVIEW_PLANNER_CONTEXT_PROMPT = "主模型实现计划："
-CODER_PATCH_OUTPUT_RULE = "补丁输出规则：修改当前文件时，优先只返回应替换旧代码的完整函数或类。除非用户明确要求重写整个文件，否则不要返回整个文件。"
+CODE_REVIEW_PLANNER_CONTEXT_PROMPT = "主模型结构化实现计划："
+CODER_PATCH_OUTPUT_RULE = (
+    "如果是在修改当前文件，请返回可用于替换的完整函数或类定义。"
+    "不要返回整文件，除非用户明确要求。"
+)
 
 PLANNER_FALLBACK_PLAN_LINES = (
-    "- 目标：实现/修改 {function_name}，参数参考：{parameters}。",
-    "- 功能要求：{task}。",
-    "- 参考符号：{symbols}；优先遵循当前文件检索结果中的完整类/函数定义。",
-    "- 只输出目标函数及必要的 import/辅助函数，不要重写整个文件或无关类。",
-    "- 保持现有调用方式兼容，返回值应直接满足用户要求。",
+    "- 目标：实现或修改 {function_name}，参数参考：{parameters}。",
+    "- 行为要求：{task}。",
+    "- 参考符号：{symbols}。",
+    "- 不要使用行号作为修改指令；请使用符号名和可见代码片段定位。",
+    "- 保持现有调用兼容性，不要修改无关逻辑。",
 )
 
 PLANNER_FALLBACK_INSUFFICIENT_CONTEXT_LINE = (
-    "- 当前文件检索结果不足时，基于用户明确给出的函数名、参数和功能生成保守实现。"
+    "- 当前代码上下文不足；请根据用户明确需求和目标符号保守实现。"
 )

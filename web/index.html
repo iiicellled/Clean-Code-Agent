@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CleanCode Agent</title>
     <link rel="stylesheet" href="/static/github.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=patch-close-v1" />
+    <link rel="stylesheet" href="/static/styles.css?v=node-output-v1" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   </head>
@@ -45,6 +45,12 @@
 
           <section ref="messagesEl" class="messages" aria-live="polite">
             <article v-for="message in messages" :key="message.localId || message.id" class="message" :class="message.role">
+              <div v-if="message.nodeOutputs && message.nodeOutputs.length" class="node-output-list">
+                <details v-for="output in message.nodeOutputs" :key="output.localId" class="node-output" :open="output.open">
+                  <summary><span>{{ output.title }}</span><span class="node-output-name">{{ output.node }}</span></summary>
+                  <div class="node-output-body markdown-body" v-html="renderAssistantContent(output.content)"></div>
+                </details>
+              </div>
               <div v-if="message.role === 'assistant' || message.role === 'system'" class="message-body markdown-body" v-html="renderAssistantContent(message.content)"></div>
               <div v-else class="message-body">{{ message.content }}</div>
             </article>
@@ -148,6 +154,6 @@
     <script src="/static/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
-    <script src="/static/app.js?v=patch-close-v1"></script>
+    <script src="/static/app.js?v=node-output-v1"></script>
   </body>
 </html>

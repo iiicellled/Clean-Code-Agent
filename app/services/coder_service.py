@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 
@@ -59,12 +59,13 @@ def _build_coder_messages(
 
 def _planner_only_prompt(planner_context: str) -> str:
     return (
-        "请严格根据下面的主模型实现计划生成代码。\n"
-        "不要重新分析用户需求，不要补充解释，不要输出 Markdown 代码围栏。\n"
-        "只返回计划要求的代码块。\n\n"
-        f"{planner_context[:4000]}"
+        "请严格遵循下面的结构化 JSON 实现计划生成代码。\n"
+        "这份 JSON 计划是本轮代码修改的唯一指令来源。\n"
+        "不要根据行号推断修改位置，也不要编造计划中没有展示的原始代码。\n"
+        "请重点读取 target.symbol、target.signature、current_code_facts、required_changes、constraints 和 uncertainties。\n"
+        "只返回用户需要的代码，使用清晰的 Markdown 代码块；不要输出无关文件或额外解释。\n\n"
+        f"{planner_context[:5000]}"
     )
-
 
 def _fallback_prompt(decision: IntentDecision, messages: list[ChatMessage]) -> str:
     slots = decision.slots

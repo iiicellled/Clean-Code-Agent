@@ -182,21 +182,21 @@ unknown
 
 `coder_chat_model` 不直接使用 tool，也不直接读取完整工作区上下文。正常链路下，coder 只消费 planner 生成的实现计划。
 
-### 5. Planner 如何把代码上下文转成实现计划
+### 5. Planner 如何把代码上下文转成结构化实现计划
 
-早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本改为主模型先规划、coder 后执行：`planner_service` 会阅读用户请求、意图槽位、基础当前文件上下文，并可通过 LangChain `search_workspace` tool 继续检索工作区，然后输出给 coder 使用的短计划。
+早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本改为主模型先规划、coder 后执行：`planner_service` 会阅读用户请求、意图槽位、基础当前文件上下文，并可通过 LangChain `search_workspace` tool 继续检索工作区，然后输出给 coder 使用的结构化 JSON 计划。
 
-Planner 不负责写完整代码，而是输出实现约束和修改步骤，通常包括：
+Planner 不负责写完整代码，而是输出稳定的 JSON 对象，通常包括：
 
-- 要新增或修改的目标函数
-- 需要参考的类、函数、字段或调用方式
-- 需要保持的函数签名、返回值含义和调用兼容性
-- 关键边界条件和异常情况
-- coder 应避免的错误，例如不要重写整个类、不要遗漏辅助逻辑
+- `target`：目标动作、文件路径、函数/类名、签名和检索符号
+- `current_code_facts`：coder 可见的原始代码片段或可靠代码事实，优先包含目标函数体
+- `required_changes`：必须实现的行为变化
+- `constraints`：不能破坏的接口、边界和修改范围
+- `implementation_notes`：可选实现提示
+- `uncertainties`：上下文不足时的假设或风险
+- `insufficient_context`：是否缺少足够代码上下文
 
-Planner 输出会被包装成以 `PLANNER_CONTEXT_PREFIX` 开头的 system message。`coder_service` 依赖这个前缀识别 planner 结果；如果识别到 planner message，coder 会进入 planner-only 模式。
-
-若 planner 调用失败，后端仍会继续执行；这时 `coder_service` 会退回旧 fallback prompt，使用结构化任务和基础当前文件上下文生成代码。
+Planner 用符号名、函数签名、可见代码片段和行为要求来指导 coder。若 planner 调用失败，后端仍会继续执行；这时 `planner_service` 会根据已知槽位和基础上下文生成 fallback JSON 计划，`coder_service` 继续按 planner-only 流程生成代码。
 
 ### 6. 主模型如何告知 coder 模型
 
@@ -204,13 +204,13 @@ Planner 输出会被包装成以 `PLANNER_CONTEXT_PREFIX` 开头的 system messa
 
 1. `intent_service` 调用主模型，得到 `IntentDecision`。
 2. `conversation_service` 加载当前工作区，并生成基础当前文件上下文。
-3. `planner_service` 调用主模型；主模型可通过 LangChain `search_workspace` tool 进一步检索代码，并生成给 coder 的实现计划。
+3. `planner_service` 调用主模型；主模型可通过 LangChain `search_workspace` tool 进一步检索代码，并生成给 coder 的结构化 JSON 实现计划。
 4. `conversation_service` 把 planner 计划追加为 system message，前缀为 `PLANNER_CONTEXT_PREFIX`。
 5. `model_router_service` 在 code intent 分支调用 `coder_service.generate_code()`；此处不会把 `workspace` 传给 coder。
 6. `coder_service` 如果发现 planner message，只构造 planner-only prompt：不再拼接用户完整输入、结构化槽位、`search_current_file` 结果或补丁规则。
 7. `coder_chat_model` 通过 OpenAI-compatible HTTP 请求调用远程 Clean-Code-Qwen，只返回目标代码。
 
-对于 `create_function`，planner 会在计划中说明应新增的目标函数和签名；对于 `modify_function`，planner 会说明应替换的目标函数、兼容性要求和边界条件。coder 模型只负责按计划产出代码。
+对于 `create_function`，planner 会在 JSON 计划中说明应新增的目标函数和签名；对于 `modify_function`，planner 会说明应替换的目标函数、当前可见代码事实、兼容性要求和边界条件。coder 模型只负责按结构化计划产出代码。
 
 ### 7. 主模型审阅与 patch 提议
 

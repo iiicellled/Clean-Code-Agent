@@ -767,3 +767,60 @@ textarea:focus {
   min-height: 30px;
   font-size: 12px;
 }
+/* transient LangGraph node outputs */
+.node-output-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.node-output {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.node-output summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  padding: 7px 10px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.node-output summary::-webkit-details-marker {
+  display: none;
+}
+
+.node-output summary::before {
+  content: "\f054";
+  color: var(--muted);
+  font: var(--fa-font-solid);
+  font-size: 10px;
+  transition: transform 0.16s ease;
+}
+
+.node-output[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.node-output-name {
+  margin-left: auto;
+  color: var(--muted);
+  font: 11px/1.2 Consolas, "SFMono-Regular", monospace;
+}
+
+.node-output-body {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding: 10px;
+  font-size: 12px;
+}
