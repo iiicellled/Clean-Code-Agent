@@ -107,7 +107,7 @@ flowchart TD
 
 ### 3. 主模型的意图识别
 
-主模型把当前最新用户输入压缩为一个结构化决策。意图识别阶段不会再读取旧的 20 条历史消息来猜关键词；如果当前文件下存在未完成任务，则只合并该任务的已填槽位和用户最新输入。当前意图集合包括：
+主模型把当前最新用户输入压缩为一个结构化决策。意图识别阶段，如果当前文件下存在未完成任务，则只合并该任务的已填槽位和用户最新输入。当前意图集合包括：
 
 ```text
 general_chat
@@ -157,7 +157,7 @@ unknown
 }
 ```
 
-如果必填槽位缺失，后端不会立即调用 coder 模型，而是保存当前任务状态并让主模型生成追问。例如用户只说“帮我新增一个函数”，系统会继续询问函数名、参数和具体功能。
+如果必填槽位缺失，后端会保存当前任务状态并让主模型生成追问：例如用户只说“帮我新增一个函数”，系统会继续询问函数名、参数和具体功能。
 
 ### 4. 工作区代码搜索、上下文与工具调用
 
@@ -185,20 +185,20 @@ unknown
 - `owner`：成员符号所属类或模块，例如 `A_class`。
 - `max_chars` / `max_files`：控制返回结果预算。
 
-对于 `A_class.b_function` 这类限定符号，工具会把 `A_class` 作为 owner scope，把 `b_function` 作为主要目标符号；survey 结果会优先展示最可能的定义位置，并给出下一步 inspect 建议。搜索结果会在后端日志中以醒目颜色打印，包含 mode、search root、query、file_path、qualified symbol、owner、symbols 和最终返回给模型的内容。
+对于 `A_class.b_function` 这类限定符号，工具会把 `A_class` 作为 owner scope，把 `b_function` 作为主要目标符号；survey 结果会优先展示最可能的定义位置，并给出下一步 inspect 建议。
 
-主模型可以在两个位置调用 `search_workspace`：
+主模型目前可以在两个位置调用 `search_workspace`：
 
 - `chatbot_service`：普通聊天、代码讲解、函数行为分析和项目问答。
 - `planner_service`：代码生成/修改任务中，为 planner 生成结构化实现计划补充工作区事实。
 
-`coder_model` 不直接调用搜索工具，也不直接读取完整工作区。正常链路下，coder 只消费 planner 生成的结构化实现计划。
+planner 生成的结构化实现计划直接作为 `coder_model` 生成代码的唯一参照。
 
 ### 5. Planner 如何把代码上下文转成结构化实现计划
 
-早期版本会把当前文件检索结果直接拼进 coder prompt。当前版本改为主模型先规划、coder 后执行：`planner_service` 会阅读用户请求、意图槽位、基础当前文件上下文，并可通过 LangChain `search_workspace` tool 继续检索工作区，然后输出给 coder 使用的结构化 JSON 计划。
+主模型先规划，coder 后执行。`planner_service` 会阅读用户请求、意图槽位、基础当前文件上下文，并可通过 LangChain `search_workspace` tool 继续检索工作区，然后输出给 coder 使用的结构化 JSON 计划。
 
-Planner 不负责写完整代码，而是输出稳定的 JSON 对象，通常包括：
+Planner 直接输出稳定的 JSON 对象，通常包括：
 
 - `target`：目标动作、文件路径、函数/类名、签名和检索符号
 - `current_code_facts`：coder 可见的原始代码片段或可靠代码事实，优先包含目标函数体
@@ -245,7 +245,7 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 
 ### 8. 会话记忆与数据库
 
-本版本必须配置 `DATABASE_URL`。没有数据库时，后端启动会失败，前端也不会退回无历史模式。
+本版本必须配置 `DATABASE_URL`。
 
 数据库保存：
 
@@ -253,7 +253,7 @@ Patch 应用发生在前端编辑器内。只有用户点击保存后，浏览�
 - 用户 / 助手 / system 消息，以及消息产生时的 `active_file`
 - 未完成代码任务的意图、`active_file`、slots 和 missing_slots
 
-数据库不再保存代码快照，也不保存本地文件内容。当前工作区状态来自前端当前打开的文件，并随每次会话请求提交给后端。
+当前工作区状态来自前端当前打开的文件，并随每次会话请求提交给后端。
 
 当前上下文策略：
 
