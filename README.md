@@ -159,28 +159,40 @@ unknown
 
 如果必填槽位缺失，后端不会立即调用 coder 模型，而是保存当前任务状态并让主模型生成追问。例如用户只说“帮我新增一个函数”，系统会继续询问函数名、参数和具体功能。
 
-### 4. 当前文件搜索、工作区上下文与工具调用
+### 4. 工作区代码搜索、上下文与工具调用
 
-右侧代码区读取本地项目文件，但文件内容不由后端主动扫描本机磁盘。前端通过浏览器的 File System Access API 让用户选择项目目录，再读取用户打开的文本文件。每次用户发送消息时，前端会把当前代码区文件列表和 `active_file` 一起提交给会话接口。
+右侧代码区通过浏览器 File System Access API 读取本地项目目录。前端会在每次会话请求中提交当前打开的文件列表、`active_file`，以及当前选择的项目目录名；后端会结合 `.env` 中的 `WORKSPACE_ROOT` 定位到实际项目子目录，并在该目录内执行工作区搜索。
 
-当前版本里有两类检索能力，职责不同：
+当前版本提供两类搜索能力：
 
-- `app/context/current_file_search.py` 是内部检索组件，不是 agent tool。它提供 Python AST/缩进兜底的定义块提取、关键词窗口、调用片段、文件头部兜底等能力。
-- `app/tools/agent_search_tool.py` 是真正的 agent tool。它把同一套底层检索能力封装成 LangChain `StructuredTool`，tool 名称为 `search_workspace`。
+- `app/context/current_file_search.py`：内部当前文件上下文组件，用于生成基础工作区事实。它支持 Python AST 定义块提取、缩进兜底、调用片段、关键词窗口和文件头部上下文。
+- `app/context/file_search.py` + `app/tools/agent_search_tool.py`：面向主模型的 `search_workspace` 工具，用于在当前项目目录内检索文件、定位符号、查看定义和调用点。
 
-`conversation_service` 仍会为代码任务生成一份基础的当前活动文件检索上下文，作为 planner 的兜底事实来源。搜索结果通常包括：
+`search_workspace` 支持三种模式：
 
-- 目标函数或类的完整定义块
-- 目标函数的调用片段
-- 关键词命中的上下文窗口
-- 文件头部 import 区域或前若干行兜底上下文
+| 模式 | 行为 |
+|---|---|
+| `auto` | 根据参数自动选择搜索粒度；没有指定 `file_path` 时偏向工作区概览，指定 `file_path` 时偏向定点查看。 |
+| `survey` | 返回压缩后的代码地图，包括候选定义、调用点、文件位置、匹配行和 Suggested next searches，不返回大段代码。 |
+| `inspect` | 在指定文件或候选范围内返回更具体的代码片段；Python 定义会优先用 AST 返回完整函数/类定义，AST 失败时使用缩进法兜底。 |
 
-同时，主模型可以在两个位置自主调用 `search_workspace`：
+工具参数包括：
 
-- `planner_service`：代码生成/修改任务中，planner 可以按需检索工作区，生成更准确的实现计划。
-- `chatbot_service`：普通聊天中，如果用户要求解释代码、询问类/函数行为、分析项目片段，主模型也可以调用同一个 tool 检索当前工作区。
+- `query`：自然语言或关键词查询。
+- `file_path`：可选的相对文件路径；指定后搜索会收窄到该文件。
+- `symbol` / `symbols`：优先检索的函数名、类名或方法名。
+- `qualified_symbol`：限定符号，例如 `Customer.check_id`。
+- `owner`：成员符号所属类或模块，例如 `Customer`。
+- `max_chars` / `max_files`：控制返回结果预算。
 
-`coder_chat_model` 不直接使用 tool，也不直接读取完整工作区上下文。正常链路下，coder 只消费 planner 生成的实现计划。
+对于 `Customer.check_id` 这类限定符号，工具会把 `Customer` 作为 owner scope，把 `check_id` 作为主要目标符号；survey 结果会优先展示最可能的定义位置，并给出下一步 inspect 建议。搜索结果会在后端日志中以醒目颜色打印，包含 mode、search root、query、file_path、qualified symbol、owner、symbols 和最终返回给模型的内容。
+
+主模型可以在两个位置调用 `search_workspace`：
+
+- `chatbot_service`：普通聊天、代码讲解、函数行为分析和项目问答。
+- `planner_service`：代码生成/修改任务中，为 planner 生成结构化实现计划补充工作区事实。
+
+`coder_chat_model` 不直接调用搜索工具，也不直接读取完整工作区。正常链路下，coder 只消费 planner 生成的结构化实现计划。
 
 ### 5. Planner 如何把代码上下文转成结构化实现计划
 
@@ -393,7 +405,8 @@ coder_agent/
       patch_service.py              # 函数级 patch 提议
       service_configs.py            # 各服务模型参数和提示词
     context/
-      current_file_search.py        # 内部代码检索组件，非 agent tool
+      current_file_search.py        # 内部当前文件上下文组件，非 agent tool
+      file_search.py                # 工作区文件系统搜索、survey/inspect 和定义/窗口提取
     tools/
       agent_search_tool.py           # LangChain StructuredTool：search_workspace
   web/
@@ -682,7 +695,7 @@ vLLM 服务 -> Clean Code Agent 后端 -> Web 页面/API
 ## 当前限制
 
 - 本地项目读取依赖浏览器 File System Access API，建议使用 Chrome 或 Edge。
-- 后端当前只搜索前端选中的当前活动文件，不做全项目索引或跨文件自动搜索。
+- 工作区搜索基于当前前端选择的项目目录和文本文件类型过滤；未打开或不在 `WORKSPACE_ROOT` 子项目中的文件不会作为当前项目上下文。
 - Patch 主要支持 Python 函数级新增和替换；类内部方法、多文件联动、跨语言 patch 还不是完整能力。
 - 内置代码运行目前只支持 Python。
 - `serve_remote.py` 当前可以接受 `stream: true`，但具体是否逐 token 输出取决于远程服务实现。
