@@ -181,18 +181,18 @@ unknown
 - `query`：自然语言或关键词查询。
 - `file_path`：可选的相对文件路径；指定后搜索会收窄到该文件。
 - `symbol` / `symbols`：优先检索的函数名、类名或方法名。
-- `qualified_symbol`：限定符号，例如 `Customer.check_id`。
-- `owner`：成员符号所属类或模块，例如 `Customer`。
+- `qualified_symbol`：限定符号，例如 `A_class.b_function`。
+- `owner`：成员符号所属类或模块，例如 `A_class`。
 - `max_chars` / `max_files`：控制返回结果预算。
 
-对于 `Customer.check_id` 这类限定符号，工具会把 `Customer` 作为 owner scope，把 `check_id` 作为主要目标符号；survey 结果会优先展示最可能的定义位置，并给出下一步 inspect 建议。搜索结果会在后端日志中以醒目颜色打印，包含 mode、search root、query、file_path、qualified symbol、owner、symbols 和最终返回给模型的内容。
+对于 `A_class.b_function` 这类限定符号，工具会把 `A_class` 作为 owner scope，把 `b_function` 作为主要目标符号；survey 结果会优先展示最可能的定义位置，并给出下一步 inspect 建议。搜索结果会在后端日志中以醒目颜色打印，包含 mode、search root、query、file_path、qualified symbol、owner、symbols 和最终返回给模型的内容。
 
 主模型可以在两个位置调用 `search_workspace`：
 
 - `chatbot_service`：普通聊天、代码讲解、函数行为分析和项目问答。
 - `planner_service`：代码生成/修改任务中，为 planner 生成结构化实现计划补充工作区事实。
 
-`coder_chat_model` 不直接调用搜索工具，也不直接读取完整工作区。正常链路下，coder 只消费 planner 生成的结构化实现计划。
+`coder_model` 不直接调用搜索工具，也不直接读取完整工作区。正常链路下，coder 只消费 planner 生成的结构化实现计划。
 
 ### 5. Planner 如何把代码上下文转成结构化实现计划
 
