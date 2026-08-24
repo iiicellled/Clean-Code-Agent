@@ -21,7 +21,7 @@ from .service_configs import (
 
 
 logger = logging.getLogger(__name__)
-MAX_PLANNER_TOOL_CALLS = 2
+MAX_PLANNER_TOOL_CALLS = 6
 MAX_CODE_FACT_CHARS = 3200
 REQUIRED_PLAN_KEYS = {
     "target",

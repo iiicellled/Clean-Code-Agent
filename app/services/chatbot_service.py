@@ -7,7 +7,7 @@ from ..schemas import ChatMessage, WorkspaceState
 from ..tools import agent_search_tool
 from .service_configs import ServiceModelConfig, CHATBOT_CONFIG
 
-MAX_CHATBOT_TOOL_CALLS = 2
+MAX_CHATBOT_TOOL_CALLS = 6
 
 
 def _routed_messages(messages: list[ChatMessage], config: ServiceModelConfig) -> list[ChatMessage]:

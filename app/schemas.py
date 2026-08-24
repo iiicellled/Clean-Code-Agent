@@ -18,6 +18,7 @@ class CodeFile(BaseModel):
 class WorkspaceState(BaseModel):
     files: list[CodeFile] = Field(default_factory=list)
     active_file: str | None = Field(default=None, max_length=260)
+    workspace_root: str | None = Field(default=None, max_length=260)
 
 
 class CodePatchProposal(BaseModel):
@@ -73,6 +74,7 @@ class ConversationChatRequest(BaseModel):
     content: str = Field(min_length=1)
     current_files: list[CodeFile] = Field(default_factory=list)
     active_file: str | None = Field(default=None, max_length=260)
+    workspace_root: str | None = Field(default=None, max_length=260)
 
 
 class ConversationChatResponse(BaseModel):

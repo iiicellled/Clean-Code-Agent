@@ -119,11 +119,18 @@ def conversation_summary(conversation: Conversation) -> ConversationSummary:
     )
 
 
+EMPTY_MESSAGE_PLACEHOLDER = "[empty message]"
+
+
+def _non_empty_content(content: str | None) -> str:
+    return content if content and content.strip() else EMPTY_MESSAGE_PLACEHOLDER
+
+
 def stored_message(message: Message) -> StoredMessage:
     return StoredMessage(
         id=message.id,
         role=message.role,  # type: ignore[arg-type]
-        content=message.content,
+        content=_non_empty_content(message.content),
         created_at=message.created_at,
         active_file=message.active_file,
     )
@@ -165,7 +172,12 @@ def _request_workspace(request: ConversationChatRequest) -> WorkspaceState | Non
     if not files:
         return None
     active_file = request.active_file or files[0]["path"]
-    return WorkspaceState(files=[CodeFile(**file) for file in files], active_file=active_file)
+    workspace_root = (request.workspace_root or "").strip() or None
+    return WorkspaceState(
+        files=[CodeFile(**file) for file in files],
+        active_file=active_file,
+        workspace_root=workspace_root,
+    )
 
 
 
@@ -390,7 +402,7 @@ def chat_in_conversation(
         logger.exception("Unexpected chat failure conversation_id=%s", conversation.id)
         raise HTTPException(status_code=500, detail=f"Conversation chat failed: {exc}") from exc
 
-    display_answer = answer
+    display_answer = _non_empty_content(answer)
     patch = getattr(result, "patch", None) if result.executed else None
     if patch is None and result.executed:
         patch = patch_service.propose_patch(request.content, workspace, display_answer, result.decision)
@@ -520,7 +532,7 @@ def stream_chat_in_conversation(
         return
 
     answer = "".join(chunks).strip()
-    display_answer = answer
+    display_answer = _non_empty_content(answer)
     if result is None:
         result = model_router_service.IntentChatResult(content=answer, decision=None, executed=False)
     patch = getattr(result, "patch", None) if result.executed else None

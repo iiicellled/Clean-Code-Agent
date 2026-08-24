@@ -2,31 +2,44 @@
 
 from dataclasses import dataclass
 import json
+import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, field_validator
 
 from ..schemas import WorkspaceState
-from ..context.current_file_search import format_workspace_tool_result, search_workspace
+from ..context.file_search import format_workspace_tool_result, infer_search_root_path, search_workspace
 
 
 SEARCH_TOOL_NAME = "search_workspace"
 MAX_TOOL_RESULT_CHARS = 9000
+SEARCH_LOG_COLOR = "\033[1;97;45m"
+SEARCH_LOG_RESET = "\033[0m"
+
+logger = logging.getLogger(__name__)
 
 SEARCH_TOOL_INSTRUCTIONS = """
 Available tool: search_workspace.
 Use it only when the provided context is not enough to complete your current role confidently.
-After a tool result is provided, continue with your final response for your current role unless one more search is necessary.
+For questions about how a function, method, or class is defined or implemented, first call search_workspace with mode="survey" unless you already know the exact file.
+After survey mode returns likely targets and suggested next searches, call search_workspace once more with mode="inspect" for the most relevant file and symbol.
+After an inspect result is provided, continue with your final response for your current role unless one more search is necessary.
 """.strip()
 
 
 class SearchWorkspaceArgs(BaseModel):
+    mode: Literal["auto", "survey", "inspect"] = Field(
+        default="auto",
+        description="survey returns a compact workspace map; inspect returns exact snippets or full definitions.",
+    )
     query: str = Field(default="", description="Natural language or identifier query for relevant code snippets.")
     file_path: str | None = Field(default=None, description="Optional exact workspace file path to search within.")
-    symbol: str | None = Field(default=None, description="Optional Python function or class name to prioritize.")
+    symbol: str | None = Field(default=None, description="Optional primary Python function, method, or class name to prioritize.")
     symbols: list[str] | None = Field(default=None, description="Optional Python function or class names to prioritize.")
+    qualified_symbol: str | None = Field(default=None, description="Optional qualified target such as Customer.check_id.")
+    owner: str | None = Field(default=None, description="Optional owner class/module for a member symbol, such as Customer.")
     max_chars: int = Field(default=MAX_TOOL_RESULT_CHARS, ge=1000, le=MAX_TOOL_RESULT_CHARS)
     max_files: int = Field(default=8, ge=1, le=20)
 
@@ -60,19 +73,25 @@ TOOL_CALL_BLOCK_RE = re.compile(r"```(?:tool_call|json)\s*\n([\s\S]*?)```", re.I
 
 def build_search_workspace_tool(workspace: WorkspaceState | None) -> StructuredTool:
     def _search_workspace(
+        mode: str = "auto",
         query: str = "",
         file_path: str | None = None,
         symbol: str | None = None,
         symbols: list[str] | None = None,
+        qualified_symbol: str | None = None,
+        owner: str | None = None,
         max_chars: int = MAX_TOOL_RESULT_CHARS,
         max_files: int = 8,
     ) -> str:
         return execute_search_workspace(
             workspace,
+            mode=mode,
             query=query,
             file_path=file_path,
             symbol=symbol,
             symbols=symbols,
+            qualified_symbol=qualified_symbol,
+            owner=owner,
             max_chars=max_chars,
             max_files=max_files,
         )
@@ -90,18 +109,25 @@ def build_search_workspace_tool(workspace: WorkspaceState | None) -> StructuredT
 
 def execute_search_workspace(
     workspace: WorkspaceState | None,
+    mode: str = "auto",
     query: str = "",
     file_path: str | None = None,
     symbol: str | None = None,
     symbols: list[str] | str | None = None,
+    qualified_symbol: str | None = None,
+    owner: str | None = None,
     max_chars: int = MAX_TOOL_RESULT_CHARS,
     max_files: int = 8,
 ) -> str:
-    if workspace is None or not workspace.files:
-        return "Tool: search_workspace\nStatus: no workspace files available."
-
+    mode = _normalise_mode(mode)
+    qualified_symbol = (qualified_symbol or "").strip() or None
+    owner = (owner or "").strip() or None
+    inferred_owner, inferred_symbol = _split_qualified_symbol(qualified_symbol or query)
+    owner = owner or inferred_owner
+    symbol = symbol or inferred_symbol
     preferred_symbols = _normalise_symbols(symbol or "", symbols)
-    query = (query or "").strip()
+    raw_query = (query or qualified_symbol or "").strip()
+    query = _normalise_query_for_search(raw_query, owner=owner, symbol=symbol)
     file_path = (file_path or "").strip() or None
     max_chars = _bounded_int(max_chars, default=MAX_TOOL_RESULT_CHARS, low=1000, high=MAX_TOOL_RESULT_CHARS)
     max_files = _bounded_int(max_files, default=8, low=1, high=20)
@@ -111,6 +137,7 @@ def execute_search_workspace(
     if not query:
         query = "relevant code"
 
+    search_root = infer_search_root_path(workspace, file_path)
     results = search_workspace(
         workspace,
         query,
@@ -119,8 +146,58 @@ def execute_search_workspace(
         max_chars=max_chars,
         max_files=max_files,
         include_fallback=bool(file_path),
+        mode=mode,
+        qualified_symbol=qualified_symbol,
+        owner=owner,
     )
-    return format_workspace_tool_result(results)[:MAX_TOOL_RESULT_CHARS]
+    result_root = getattr(results, "root_path", "")
+    if not result_root and isinstance(results, list) and results and results[0].root_path:
+        result_root = results[0].root_path
+    search_root = result_root or search_root
+    final_result = format_workspace_tool_result(results, search_root=search_root)[:MAX_TOOL_RESULT_CHARS]
+    _log_search_result(
+        final_result,
+        query=query,
+        file_path=file_path,
+        preferred_symbols=preferred_symbols,
+        max_chars=max_chars,
+        max_files=max_files,
+        search_root=search_root,
+        mode=mode,
+        qualified_symbol=qualified_symbol,
+        owner=owner,
+    )
+    return final_result
+
+
+def _log_search_result(
+    result: str,
+    query: str,
+    file_path: str | None,
+    preferred_symbols: list[str],
+    max_chars: int,
+    max_files: int,
+    search_root: str,
+    mode: str,
+    qualified_symbol: str | None,
+    owner: str | None,
+) -> None:
+    header = (
+        " SEARCH_WORKSPACE RESULT "
+        f"mode={mode!r} root={search_root!r} query={query!r} file_path={file_path!r} "
+        f"qualified={qualified_symbol!r} owner={owner!r} "
+        f"symbols={preferred_symbols!r} max_chars={max_chars} max_files={max_files} "
+    )
+    separator = "=" * max(80, len(header))
+    logger.info(
+        "\n%s%s\n%s\n%s\n%s%s",
+        SEARCH_LOG_COLOR,
+        separator,
+        header,
+        separator,
+        result,
+        SEARCH_LOG_RESET,
+    )
 
 
 def parse_tool_call(content: str) -> AgentToolCall | None:
@@ -155,14 +232,35 @@ def execute_tool_call(call: AgentToolCall, workspace: WorkspaceState | None) -> 
     args = call.arguments
     return execute_search_workspace(
         workspace,
+        mode=str(args.get("mode") or "auto"),
         query=str(args.get("query") or args.get("pattern") or ""),
         file_path=str(args.get("file_path") or args.get("path") or "") or None,
         symbol=str(args.get("symbol") or "") or None,
         symbols=args.get("symbols"),
+        qualified_symbol=str(args.get("qualified_symbol") or args.get("qualified") or "") or None,
+        owner=str(args.get("owner") or "") or None,
         max_chars=args.get("max_chars", MAX_TOOL_RESULT_CHARS),
         max_files=args.get("max_files", 8),
     )
 
+
+
+def _normalise_mode(value: str) -> str:
+    mode = (value or "auto").strip().lower()
+    return mode if mode in {"auto", "survey", "inspect"} else "auto"
+
+
+def _split_qualified_symbol(value: str) -> tuple[str | None, str | None]:
+    match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b", value or "")
+    if not match:
+        return None, None
+    return match.group(1), match.group(2)
+
+
+def _normalise_query_for_search(query: str, owner: str | None, symbol: str | None) -> str:
+    if owner and symbol and re.search(rf"\b{re.escape(owner)}\.{re.escape(symbol)}\b", query or ""):
+        return " ".join([symbol, owner])
+    return query
 
 def _normalise_symbols(symbol: str, symbols: Any) -> list[str]:
     result: list[str] = []

@@ -305,11 +305,17 @@ class LangChainChatModel(_ServiceConfigMixin):
                     logger.info("%s model LangChain tool call succeeded: answer_chars=%d", self.stg.label, len(answer))
                     return answer
 
-                langchain_messages.append(response)
                 if tool_round >= max_tool_calls:
-                    logger.warning("%s model requested too many tool calls; returning latest content", self.stg.label)
-                    return self._content_text(response).strip()
+                    logger.warning("%s model requested too many tool calls; finalizing without tools", self.stg.label)
+                    answer = self._final_answer_after_tool_limit(langchain_messages, cfg)
+                    if answer:
+                        return answer
+                    latest_content = self._content_text(response).strip()
+                    if latest_content:
+                        return latest_content
+                    raise RemoteModelError(f"{self.stg.label} model exceeded tool call limit without a final answer")
 
+                langchain_messages.append(response)
                 for index, tool_call in enumerate(tool_calls):
                     name = str(tool_call.get("name") or "")
                     tool = tool_map.get(name)
@@ -397,12 +403,29 @@ class LangChainChatModel(_ServiceConfigMixin):
             max_tokens=self._effective_max_tokens(cfg),
         )
 
+    def _final_answer_after_tool_limit(self, messages: list[BaseMessage], cfg: ServiceModelConfig) -> str:
+        final_messages = [
+            *messages,
+            HumanMessage(
+                content=(
+                    "The tool call limit has been reached. Do not call any more tools. "
+                    "Answer the user's request using the search results already provided."
+                )
+            ),
+        ]
+        response = self._build_llm(cfg).invoke(final_messages)
+        answer = self._content_text(response).strip()
+        if answer:
+            logger.info("%s model finalized after tool limit: answer_chars=%d", self.stg.label, len(answer))
+        return answer
+
     @staticmethod
     def _content_text(message: BaseMessage) -> str:
         content = getattr(message, "content", "")
         if isinstance(content, list):
             return "".join(part.get("text", "") for part in content if isinstance(part, dict))
         return content if isinstance(content, str) else ""
+
     def remote_diagnostics(self) -> dict[str, Any]:
         return {"ok": self.configured, "provider": "langchain-openai", "model": self.stg.model_name}
 

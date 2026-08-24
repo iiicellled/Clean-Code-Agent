@@ -708,6 +708,7 @@ createApp({
           content,
           current_files: this.currentFilesPayload(),
           active_file: this.workspace.active_file,
+          workspace_root: this.workspaceRoot,
         }),
       });
       if (!response.ok) {

@@ -15,7 +15,7 @@ class ServiceModelConfig:
 INTENT_CONFIG = ServiceModelConfig(
     temperature=0.0,
     top_p=1.0,
-    max_new_tokens=1600,
+    max_new_tokens=2048,
     system_prompt=(
         "你是一个代码智能体的意图识别器，只能返回严格 JSON。"
         "请根据用户最新输入判断意图，并抽取后续代码任务需要的槽位。"
@@ -38,7 +38,7 @@ CHATBOT_CONFIG = ServiceModelConfig(
 CODER_CONFIG = ServiceModelConfig(
     temperature=0.2,
     top_p=0.9,
-    max_new_tokens=2048,
+    max_new_tokens=4096,
     system_prompt=(
         "你是一个专注的代码生成模型。请严格根据输入中的实现计划或任务要求生成代码。"
         "不要擅自修改无关逻辑，不要编造未提供的原始代码。"
@@ -49,7 +49,7 @@ CODER_CONFIG = ServiceModelConfig(
 PLANNER_CONFIG = ServiceModelConfig(
     temperature=0.0,
     top_p=1.0,
-    max_new_tokens=1800,
+    max_new_tokens=4096,
     system_prompt=(
         "你是代码修改任务的规划器。你的职责是阅读用户需求、可见的工作区代码片段和工具检索结果，"
         "然后为 coder 模型输出一份紧凑、可执行的 JSON 实现计划。"
